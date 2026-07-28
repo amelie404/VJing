@@ -155,6 +155,37 @@
   <div class="row"><label>Blur</label><input type="range" id="blurSlider" min="0" max="20" value="0"><span class="val" id="blurVal">0px</span></div>
   <div class="row"><label>Helligkeit</label><input type="range" id="brightSlider" min="50" max="200" value="100"><span class="val" id="brightVal">100%</span></div>
   <div class="row"><label>Kontrast</label><input type="range" id="contrastSlider" min="50" max="200" value="100"><span class="val" id="contrastVal">100%</span></div>
+  <div class="row"><label>Sättigung</label><input type="range" id="saturateSlider" min="0" max="300" value="100"><span class="val" id="saturateVal">100%</span></div>
+  <div class="row"><label>Graustufen</label><input type="range" id="grayscaleSlider" min="0" max="100" value="0"><span class="val" id="grayscaleVal">0%</span></div>
+  <div class="row"><label>Sepia</label><input type="range" id="sepiaSlider" min="0" max="100" value="0"><span class="val" id="sepiaVal">0%</span></div>
+  <div class="row">
+    <label>Tint-Farbe</label>
+    <select id="tintColorSel">
+      <option value="none">Aus</option>
+      <option value="#ff0000">Rot</option>
+      <option value="#00ff00">Grün</option>
+      <option value="#0000ff">Blau</option>
+      <option value="#ffff00">Gelb</option>
+      <option value="#ff00ff">Magenta</option>
+      <option value="#00ffff">Cyan</option>
+      <option value="#ff7700">Orange</option>
+      <option value="#aa00ff">Violett</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Tint-Modus</label>
+    <select id="tintModeSel">
+      <option value="color">Färben (Color)</option>
+      <option value="multiply">Multiplizieren (Multiply)</option>
+      <option value="screen">Screen</option>
+      <option value="overlay">Overlay</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Tint-Stärke</label>
+    <input type="range" id="tintStrengthSlider" min="0" max="100" value="0">
+    <span class="val" id="tintStrengthVal">0%</span>
+  </div>
 
   <h2>MIDI &mdash; nanoKONTROL2</h2>
   <div class="midiRow"><span class="badge" id="midiBadge"></span><span id="midiStatus">nicht verbunden</span></div>
@@ -225,6 +256,12 @@ const state = {
   blur: 0,         // 0-20
   brightness: 100, // 50-200
   contrast: 100,   // 50-200
+  saturate: 100,   // 0-300
+  grayscale: 0,    // 0-100
+  sepia: 0,        // 0-100
+  tintColor: 'none', // Color Hex or 'none'
+  tintMode: 'color', // Blend mode for tint
+  tintStrength: 0, // 0-100
   feedback: 0,    // 0-1
   rgbShift: 0,    // px
   hue: 0,
@@ -521,15 +558,36 @@ const brightSlider = document.getElementById('brightSlider');
 const brightVal = document.getElementById('brightVal');
 const contrastSlider = document.getElementById('contrastSlider');
 const contrastVal = document.getElementById('contrastVal');
+const saturateSlider = document.getElementById('saturateSlider');
+const saturateVal = document.getElementById('saturateVal');
+const grayscaleSlider = document.getElementById('grayscaleSlider');
+const grayscaleVal = document.getElementById('grayscaleVal');
+const sepiaSlider = document.getElementById('sepiaSlider');
+const sepiaVal = document.getElementById('sepiaVal');
+
+const tintColorSel = document.getElementById('tintColorSel');
+const tintModeSel = document.getElementById('tintModeSel');
+const tintStrengthSlider = document.getElementById('tintStrengthSlider');
+const tintStrengthVal = document.getElementById('tintStrengthVal');
 
 function updateCSSFilters(){
-  stage.style.filter = `invert(${state.invert}%) blur(${state.blur}px) brightness(${state.brightness}%) contrast(${state.contrast}%)`;
+  stage.style.filter = `invert(${state.invert}%) blur(${state.blur}px) brightness(${state.brightness}%) contrast(${state.contrast}%) saturate(${state.saturate}%) grayscale(${state.grayscale}%) sepia(${state.sepia}%)`;
 }
 
 invertSlider.oninput = ()=>{ state.invert = +invertSlider.value; invertVal.textContent = invertSlider.value + '%'; updateCSSFilters(); };
 blurSlider.oninput = ()=>{ state.blur = +blurSlider.value; blurVal.textContent = blurSlider.value + 'px'; updateCSSFilters(); };
 brightSlider.oninput = ()=>{ state.brightness = +brightSlider.value; brightVal.textContent = brightSlider.value + '%'; updateCSSFilters(); };
 contrastSlider.oninput = ()=>{ state.contrast = +contrastSlider.value; contrastVal.textContent = contrastSlider.value + '%'; updateCSSFilters(); };
+saturateSlider.oninput = ()=>{ state.saturate = +saturateSlider.value; saturateVal.textContent = saturateSlider.value + '%'; updateCSSFilters(); };
+grayscaleSlider.oninput = ()=>{ state.grayscale = +grayscaleSlider.value; grayscaleVal.textContent = grayscaleSlider.value + '%'; updateCSSFilters(); };
+sepiaSlider.oninput = ()=>{ state.sepia = +sepiaSlider.value; sepiaVal.textContent = sepiaSlider.value + '%'; updateCSSFilters(); };
+
+tintColorSel.onchange = ()=>{ state.tintColor = tintColorSel.value; };
+tintModeSel.onchange = ()=>{ state.tintMode = tintModeSel.value; };
+tintStrengthSlider.oninput = ()=>{
+  state.tintStrength = +tintStrengthSlider.value;
+  tintStrengthVal.textContent = tintStrengthSlider.value + '%';
+};
 
 /* ---------- MIDI ---------- */
 const midiBadge = document.getElementById('midiBadge');
@@ -679,6 +737,16 @@ function draw(t){
     if (state.layerB >= 0 && state.layerB < state.clips.length && state.mix > 0) {
       const clipB = state.clips[state.layerB];
       drawVideo(clipB.el, state.mix / 100, state.blendMode);
+    }
+
+    // 3. Color Tint Overlay
+    if (state.tintColor !== 'none' && state.tintStrength > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = state.tintMode;
+      ctx.globalAlpha = state.tintStrength / 100;
+      ctx.fillStyle = state.tintColor;
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
     }
   }
 
