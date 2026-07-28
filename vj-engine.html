@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>VJ Engine</title>
+<style>
+  :root{
+    --bg:#0a0a0c;
+    --panel:#111114ee;
+    --line:#2a2a30;
+    --accent:#df8de3;
+    --accent2:#ff6b6b;
+    --text:#d8d8dc;
+    --dim:#7a7a82;
+    --mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:var(--mono);}
+  #stage{position:fixed;inset:0;width:100vw;height:100vh;background:#000;}
+  #panel{
+    position:fixed;top:0;left:0;z-index:10;
+    width:300px;max-height:100vh;overflow-y:auto;
+    background:var(--panel);border-right:1px solid var(--line);
+    color:var(--text);padding:14px;font-size:11px;line-height:1.5;
+    backdrop-filter:blur(6px);
+  }
+  #panel.hidden{display:none;}
+  h1{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0 0 10px;}
+  h2{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:16px 0 6px;border-top:1px solid var(--line);padding-top:10px;}
+  .row{display:flex;align-items:center;gap:8px;margin:5px 0;}
+  .row label{flex:0 0 78px;color:var(--dim);font-size:10px;}
+  select,input[type=range],input[type=file],button,input[type=checkbox]{
+    background:#1a1a1f;border:1px solid var(--line);color:var(--text);
+    font-family:var(--mono);font-size:10px;border-radius:3px;padding:3px 5px;
+  }
+  select,button{cursor:pointer;}
+  button{width:100%;padding:6px;margin-top:4px;}
+  button:hover{border-color:var(--accent);color:var(--accent);}
+  button.active{background:var(--accent);color:#000;border-color:var(--accent);}
+  input[type=range]{flex:1;accent-color:var(--accent);}
+  .val{width:34px;text-align:right;color:var(--accent);font-size:10px;}
+  .clips{max-height:110px;overflow-y:auto;margin-top:4px;}
+  .clip{
+    padding:4px 6px;border:1px solid var(--line);border-radius:3px;margin-bottom:3px;
+    font-size:10px;color:var(--dim);
+    display:flex;align-items:center;justify-content:space-between;gap:6px;
+  }
+  .clip-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .layer-btns{display:flex;gap:3px;flex-shrink:0;}
+  .layer-btn{
+    padding:1px 4px;font-size:9px;background:#1a1a1f;border:1px solid var(--line);
+    color:var(--text);border-radius:2px;cursor:pointer;font-family:var(--mono);
+  }
+  .layer-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .layer-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
+  .badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:#444;margin-right:5px;}
+  .badge.on{background:var(--accent);box-shadow:0 0 6px var(--accent);}
+  .midiRow{font-size:9px;color:var(--dim);}
+  .hint{color:var(--dim);font-size:9px;margin-top:2px;}
+  #toggleBtn{
+    position:fixed;top:10px;left:310px;z-index:11;
+    background:var(--panel);border:1px solid var(--line);color:var(--dim);
+    padding:5px 8px;border-radius:3px;cursor:pointer;font-family:var(--mono);font-size:10px;
+  }
+  #ccMonitor{font-size:9px;color:var(--accent2);min-height:14px;}
+  #levelBar{height:4px;background:#1a1a1f;border-radius:2px;overflow:hidden;margin-top:4px;}
+  #levelFill{height:100%;width:0%;background:var(--accent);}
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+<button id="toggleBtn">UI ausblenden (H)</button>
+
+<div id="panel">
+  <h1>&#9632; VJ Engine</h1>
+
+  <div class="row">
+    <label>Screen / Spur</label>
+    <select id="channelSel">
+      <option value="1">1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option>
+    </select>
+  </div>
+  <div class="hint">Muss zur physischen Monitor-Position UND zur nanoKONTROL2-Spur (1-4) passen.</div>
+
+  <h2>Video-Bank</h2>
+  <input type="file" id="fileInput" accept="video/*" multiple>
+  <div class="clips" id="clipList"></div>
+  <div class="row">
+    <label>Fokus-Layer</label>
+    <select id="focusSel">
+      <option value="A">Layer A (Basis)</option>
+      <option value="B">Layer B (Blend)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Mix A / B</label>
+    <input type="range" id="mixSlider" min="0" max="100" value="0">
+    <span class="val" id="mixVal">0%</span>
+  </div>
+  <div class="row">
+    <label>Blend-Mode</label>
+    <select id="blendSel">
+      <option value="source-over">Normal</option>
+      <option value="screen">Screen (Negativ)</option>
+      <option value="multiply">Multiply</option>
+      <option value="lighter">Add (Aufhellen)</option>
+      <option value="difference">Difference</option>
+      <option value="overlay">Overlay</option>
+    </select>
+  </div>
+  <div class="hint">A/B Klick = zuweisen. Pfeiltasten &#8592;&#8594; wechseln Clip auf Fokus-Layer.</div>
+
+  <h2>Audio-Reaktivität</h2>
+  <div class="row">
+    <label>Quelle</label>
+    <select id="audioSrc">
+      <option value="none">Aus</option>
+      <option value="mic">Mikrofon</option>
+      <option value="display">Tab/System-Audio teilen</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Bin Quelle</label>
+    <input type="checkbox" id="isSourceChk">
+    <span class="hint" style="flex:1">Nur EIN Fenster sollte das sein</span>
+  </div>
+  <div id="levelBar"><div id="levelFill"></div></div>
+
+  <h2>Effekte</h2>
+  <div class="row"><label>Feedback</label><input type="range" id="fbSlider" min="0" max="100" value="0"><span class="val" id="fbVal">0</span></div>
+  <div class="row"><label>RGB-Shift</label><input type="range" id="rgbSlider" min="0" max="100" value="0"><span class="val" id="rgbVal">0</span></div>
+  <div class="row"><label>Hue</label><input type="range" id="hueSlider" min="0" max="360" value="0"><span class="val" id="hueVal">0</span></div>
+  <div class="row"><label>Glitch</label><input type="range" id="glitchSlider" min="0" max="100" value="0"><span class="val" id="glitchVal">0</span></div>
+  <div class="row"><label>Zoom-Pulse</label><input type="range" id="zoomSlider" min="0" max="100" value="0"><span class="val" id="zoomVal">0</span></div>
+  <div class="row"><label>Mosaik</label><input type="range" id="mosaicSlider" min="0" max="100" value="0"><span class="val" id="mosaicVal">0</span></div>
+  <div class="row"><label>Echo</label><input type="range" id="echoSlider" min="0" max="100" value="0"><span class="val" id="echoVal">0</span></div>
+  <div class="row"><label>Vignette</label><input type="range" id="vignetteSlider" min="0" max="100" value="0"><span class="val" id="vignetteVal">0</span></div>
+  <div class="row">
+    <label>Spiegelung</label>
+    <select id="mirrorSel">
+      <option value="none">Aus</option>
+      <option value="h">Horizontal</option>
+      <option value="v">Vertikal</option>
+      <option value="both">Beide</option>
+    </select>
+  </div>
+  <button id="kaleidoBtn">Kaleidoskop [aus]</button>
+  <button id="strobeBtn">Strobe [aus]</button>
+  <button id="freezeBtn">Stutter (Leertaste)</button>
+
+  <h2>Bild-Effekte (GPU)</h2>
+  <div class="row"><label>Invert</label><input type="range" id="invertSlider" min="0" max="100" value="0"><span class="val" id="invertVal">0%</span></div>
+  <div class="row"><label>Blur</label><input type="range" id="blurSlider" min="0" max="20" value="0"><span class="val" id="blurVal">0px</span></div>
+  <div class="row"><label>Helligkeit</label><input type="range" id="brightSlider" min="50" max="200" value="100"><span class="val" id="brightVal">100%</span></div>
+  <div class="row"><label>Kontrast</label><input type="range" id="contrastSlider" min="50" max="200" value="100"><span class="val" id="contrastVal">100%</span></div>
+
+  <h2>MIDI &mdash; nanoKONTROL2</h2>
+  <div class="midiRow"><span class="badge" id="midiBadge"></span><span id="midiStatus">nicht verbunden</span></div>
+  <div id="ccMonitor">&nbsp;</div>
+  <div class="hint">Spur = Screen-Nummer oben. Slider&nbsp;&#8594;Feedback, Knob&nbsp;&#8594;RGB-Shift, S&nbsp;&#8594;n&auml;chster Clip, M&nbsp;&#8594;Strobe, R&nbsp;&#8594;Kaleidoskop.</div>
+
+  <h2>Performance</h2>
+  <div class="row">
+    <label>Qualität</label>
+    <select id="qualitySel">
+      <option value="1">100% (Scharf)</option>
+      <option value="0.75">75% (Medium)</option>
+      <option value="0.5">50% (Schnell)</option>
+      <option value="0.35">35% (Max Perf)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>FPS</label>
+    <span class="val" id="fpsVal">--</span>
+  </div>
+
+  <h2>Fullscreen</h2>
+  <button id="fsBtn">Vollbild (F)</button>
+</div>
+
+<div id="videoContainer" style="display:none;"></div>
+
+<script>
+/* ============ KONFIGURATION ============
+   Standard-CC-Zuordnung des Korg nanoKONTROL2 im CC-Modus.
+   Falls dein Controller anders belegt ist: unten im "CC Monitor" im Panel
+   nachsehen, welche CC-Nummer beim Drehen/Drücken auftaucht, und hier anpassen. */
+const MIDI_CC = {
+  slider: [0,1,2,3],   // Spur 1-4 Fader  -> Feedback
+  knob:   [16,17,18,19], // Spur 1-4 Knopf -> RGB-Shift
+  solo:   [32,33,34,35], // S-Buttons      -> nächster Clip
+  mute:   [48,49,50,51], // M-Buttons      -> Strobe toggle
+  record: [64,65,66,67], // R-Buttons      -> Kaleidoskop toggle
+  mix:    [4,5,6,7],     // Spur 5-8 Fader  -> Mix A/B
+};
+/* ======================================= */
+
+const stage = document.getElementById('stage');
+const ctx = stage.getContext('2d');
+let W, H;
+function resize(){
+  W = stage.width = Math.round(innerWidth * state.renderScale);
+  H = stage.height = Math.round(innerHeight * state.renderScale);
+}
+
+const state = {
+  channel: 1,
+  clips: [],      // {url, el, name}
+  layerA: -1,     // Clip Index für Layer A
+  layerB: -1,     // Clip Index für Layer B
+  activeLayer: 'A', // Aktiver Fokus-Layer ('A' oder 'B')
+  mix: 0,         // Mix A/B Verhältnis (0-100)
+  blendMode: 'source-over', // Mischmodus für Layer B
+  renderScale: 1.0,
+  glitch: 0,       // 0-100
+  zoomPulse: 0,    // 0-100
+  mosaic: 0,       // 0-100
+  echo: 0,         // 0-100
+  vignette: 0,     // 0-100
+  mirror: 'none',  // 'none', 'h', 'v', 'both'
+  freeze: false,
+  invert: 0,       // 0-100
+  blur: 0,         // 0-20
+  brightness: 100, // 50-200
+  contrast: 100,   // 50-200
+  feedback: 0,    // 0-1
+  rgbShift: 0,    // px
+  hue: 0,
+  kaleido: false,
+  strobe: false,
+  audioLevel: 0,
+  audioBass: 0,
+};
+
+addEventListener('resize', resize); resize();
+
+/* ---------- Video-Bank ---------- */
+const fileInput = document.getElementById('fileInput');
+const clipListEl = document.getElementById('clipList');
+
+fileInput.addEventListener('change', e=>{
+  [...e.target.files].forEach(f=>{
+    const url = URL.createObjectURL(f);
+    const el = document.createElement('video');
+    el.src = url; el.loop = true; el.muted = true; el.playsInline = true;
+    el.crossOrigin = 'anonymous';
+    el.preload = 'auto';
+    document.getElementById('videoContainer').appendChild(el);
+    el.load();
+    state.clips.push({url, el, name:f.name});
+  });
+  renderClipList();
+  if(state.layerA === -1 && state.layerB === -1 && state.clips.length){
+    selectClip(0, 'A');
+  }
+});
+
+function renderClipList(){
+  clipListEl.innerHTML = '';
+  state.clips.forEach((c,i)=>{
+    const d = document.createElement('div');
+    d.className = 'clip';
+    d.onclick = ()=> selectClip(i);
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'clip-name';
+    nameSpan.textContent = c.name;
+    d.appendChild(nameSpan);
+    
+    const btnsDiv = document.createElement('div');
+    btnsDiv.className = 'layer-btns';
+    
+    const btnA = document.createElement('button');
+    btnA.className = 'layer-btn' + (i === state.layerA ? ' active' : '');
+    btnA.textContent = 'A';
+    btnA.onclick = (e) => { e.stopPropagation(); selectClip(i, 'A'); };
+    
+    const btnB = document.createElement('button');
+    btnB.className = 'layer-btn' + (i === state.layerB ? ' active' : '');
+    btnB.textContent = 'B';
+    btnB.onclick = (e) => { e.stopPropagation(); selectClip(i, 'B'); };
+    
+    btnsDiv.appendChild(btnA);
+    btnsDiv.appendChild(btnB);
+    d.appendChild(btnsDiv);
+    clipListEl.appendChild(d);
+  });
+}
+
+function updateVideoPlayStates(){
+  state.clips.forEach((c, idx) => {
+    const isActive = (idx === state.layerA || idx === state.layerB);
+    if(isActive){
+      if(c.el.paused){
+        c.el.play().catch(()=>{});
+      }
+    } else {
+      if(!c.el.paused){
+        c.el.pause();
+      }
+    }
+  });
+}
+
+function selectClip(i, targetLayer = null){
+  if(!state.clips.length) return;
+  const layer = targetLayer || state.activeLayer;
+  i = (i + state.clips.length) % state.clips.length;
+  console.log(`selectClip: Index=${i}, Layer=${layer}, Explicit=${targetLayer !== null}`);
+
+  const currentIdx = (layer === 'A') ? state.layerA : state.layerB;
+
+  if (targetLayer === null && currentIdx === i) {
+    const v = state.clips[i].el;
+    v.currentTime = 0;
+    v.play().catch(()=>{});
+    console.log(`Clip ${i} auf Layer ${layer} neu gestartet.`);
+    return;
+  }
+
+  if(layer === 'A'){
+    if(targetLayer !== null && state.layerA === i){
+      state.layerA = -1;
+      console.log(`Layer A entladen.`);
+    } else {
+      state.layerA = i;
+      const v = state.clips[i].el;
+      v.currentTime = 0;
+      v.play().catch(()=>{});
+      console.log(`Layer A: Clip ${i} geladen.`);
+    }
+  } else {
+    if(targetLayer !== null && state.layerB === i){
+      state.layerB = -1;
+      console.log(`Layer B entladen.`);
+    } else {
+      state.layerB = i;
+      const v = state.clips[i].el;
+      v.currentTime = 0;
+      v.play().catch(()=>{});
+      console.log(`Layer B: Clip ${i} geladen.`);
+    }
+  }
+
+  updateVideoPlayStates();
+  renderClipList();
+}
+
+addEventListener('keydown', e=>{
+  const layer = state.activeLayer;
+  const currentIdx = (layer === 'A') ? state.layerA : state.layerB;
+
+  if(e.key==='ArrowRight') selectClip(currentIdx + 1);
+  if(e.key==='ArrowLeft') selectClip(currentIdx - 1);
+  if(e.key==='f' || e.key==='F') toggleFullscreen();
+  if(e.key==='h' || e.key==='H') togglePanel();
+  if(e.code === 'Space'){
+    if(!state.freeze) setFreeze(true);
+    e.preventDefault();
+  }
+});
+addEventListener('keyup', e=>{
+  if(e.code === 'Space'){
+    if(state.freeze) setFreeze(false);
+    e.preventDefault();
+  }
+});
+
+/* ---------- Audio-Reaktivität ---------- */
+let audioCtx, analyser, freqData, isAudioSource = false;
+const audioSrcSel = document.getElementById('audioSrc');
+const isSourceChk = document.getElementById('isSourceChk');
+const levelFill = document.getElementById('levelFill');
+const bc = new BroadcastChannel('vj-audio-sync');
+
+async function setupAudio(mode){
+  if(audioCtx){ audioCtx.close(); audioCtx=null; analyser=null; }
+  if(mode==='none') return;
+  try{
+    let stream;
+    if(mode==='mic'){
+      stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    } else if(mode==='display'){
+      stream = await navigator.mediaDevices.getDisplayMedia({video:true, audio:true});
+    }
+    audioCtx = new AudioContext();
+    const src = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+  }catch(err){
+    console.error('Audio setup failed', err);
+    alert('Audio-Zugriff fehlgeschlagen: ' + err.message);
+  }
+}
+audioSrcSel.addEventListener('change', ()=> setupAudio(audioSrcSel.value));
+isSourceChk.addEventListener('change', ()=> isAudioSource = isSourceChk.checked);
+
+function readLocalAudio(){
+  if(!analyser) return null;
+  analyser.getByteFrequencyData(freqData);
+  let sum=0, bassSum=0, bassN=0;
+  for(let i=0;i<freqData.length;i++){
+    sum += freqData[i];
+    if(i < freqData.length*0.15){ bassSum += freqData[i]; bassN++; }
+  }
+  return { level: sum/freqData.length/255, bass: bassN? bassSum/bassN/255 : 0 };
+}
+
+let lastBroadcastT = 0;
+function updateAudio(t){
+  const local = readLocalAudio();
+  if(local){
+    state.audioLevel = local.level;
+    state.audioBass = local.bass;
+    if(isAudioSource && t - lastBroadcastT > 33){
+      bc.postMessage({level: local.level, bass: local.bass});
+      lastBroadcastT = t;
+    }
+  }
+  levelFill.style.width = Math.round(state.audioLevel*100) + '%';
+}
+bc.onmessage = (e)=>{
+  if(!analyser){ // nur übernehmen wenn dieses Fenster nicht selbst aufnimmt
+    state.audioLevel = e.data.level;
+    state.audioBass = e.data.bass;
+  }
+};
+
+/* ---------- Effekt-Regler (manuell, Fallback ohne MIDI) ---------- */
+const fbSlider = document.getElementById('fbSlider');
+const rgbSlider = document.getElementById('rgbSlider');
+const hueSlider = document.getElementById('hueSlider');
+const fbVal = document.getElementById('fbVal');
+const rgbVal = document.getElementById('rgbVal');
+const hueVal = document.getElementById('hueVal');
+
+fbSlider.oninput = ()=>{ state.feedback = fbSlider.value/100; fbVal.textContent = fbSlider.value; };
+rgbSlider.oninput = ()=>{ state.rgbShift = rgbSlider.value/100*30; rgbVal.textContent = rgbSlider.value; };
+hueSlider.oninput = ()=>{ state.hue = +hueSlider.value; hueVal.textContent = hueSlider.value; };
+
+const focusSel = document.getElementById('focusSel');
+focusSel.onchange = ()=>{ state.activeLayer = focusSel.value; };
+
+const mixSlider = document.getElementById('mixSlider');
+const mixVal = document.getElementById('mixVal');
+mixSlider.oninput = ()=>{
+  state.mix = +mixSlider.value;
+  mixVal.textContent = mixSlider.value + '%';
+};
+
+const blendSel = document.getElementById('blendSel');
+blendSel.onchange = ()=>{ state.blendMode = blendSel.value; };
+
+const qualitySel = document.getElementById('qualitySel');
+qualitySel.onchange = ()=>{
+  state.renderScale = parseFloat(qualitySel.value);
+  resize();
+};
+
+// Neue Effekte Bindings
+const glitchSlider = document.getElementById('glitchSlider');
+const glitchVal = document.getElementById('glitchVal');
+glitchSlider.oninput = ()=>{ state.glitch = +glitchSlider.value; glitchVal.textContent = glitchSlider.value; };
+
+const zoomSlider = document.getElementById('zoomSlider');
+const zoomVal = document.getElementById('zoomVal');
+zoomSlider.oninput = ()=>{ state.zoomPulse = +zoomSlider.value; zoomVal.textContent = zoomSlider.value; };
+
+const mosaicSlider = document.getElementById('mosaicSlider');
+const mosaicVal = document.getElementById('mosaicVal');
+mosaicSlider.oninput = ()=>{ state.mosaic = +mosaicSlider.value; mosaicVal.textContent = mosaicSlider.value; };
+
+const echoSlider = document.getElementById('echoSlider');
+const echoVal = document.getElementById('echoVal');
+echoSlider.oninput = ()=>{ state.echo = +echoSlider.value; echoVal.textContent = echoSlider.value; };
+
+const vignetteSlider = document.getElementById('vignetteSlider');
+const vignetteVal = document.getElementById('vignetteVal');
+vignetteSlider.oninput = ()=>{ state.vignette = +vignetteSlider.value; vignetteVal.textContent = vignetteSlider.value; };
+
+const mirrorSel = document.getElementById('mirrorSel');
+mirrorSel.onchange = ()=>{ state.mirror = mirrorSel.value; };
+
+const kaleidoBtn = document.getElementById('kaleidoBtn');
+const strobeBtn = document.getElementById('strobeBtn');
+const freezeBtn = document.getElementById('freezeBtn');
+kaleidoBtn.onclick = ()=> setKaleido(!state.kaleido);
+strobeBtn.onclick = ()=> setStrobe(!state.strobe);
+freezeBtn.onclick = ()=> setFreeze(!state.freeze);
+
+function setKaleido(v){ state.kaleido=v; kaleidoBtn.textContent='Kaleidoskop ['+(v?'an':'aus')+']'; kaleidoBtn.classList.toggle('active',v); }
+function setStrobe(v){ state.strobe=v; strobeBtn.textContent='Strobe ['+(v?'an':'aus')+']'; strobeBtn.classList.toggle('active',v); }
+
+let freezeCanvas = null;
+let freezeCtx = null;
+function setFreeze(v){
+  state.freeze = v;
+  freezeBtn.textContent = 'Stutter [' + (v ? 'an' : 'Leertaste') + ']';
+  freezeBtn.classList.toggle('active', v);
+  if(v){
+    if(!freezeCanvas){
+      freezeCanvas = document.createElement('canvas');
+      freezeCtx = freezeCanvas.getContext('2d');
+    }
+    freezeCanvas.width = W;
+    freezeCanvas.height = H;
+    freezeCtx.drawImage(stage, 0, 0);
+  }
+}
+
+// GPU CSS Filters Bindings
+const invertSlider = document.getElementById('invertSlider');
+const invertVal = document.getElementById('invertVal');
+const blurSlider = document.getElementById('blurSlider');
+const blurVal = document.getElementById('blurVal');
+const brightSlider = document.getElementById('brightSlider');
+const brightVal = document.getElementById('brightVal');
+const contrastSlider = document.getElementById('contrastSlider');
+const contrastVal = document.getElementById('contrastVal');
+
+function updateCSSFilters(){
+  stage.style.filter = `invert(${state.invert}%) blur(${state.blur}px) brightness(${state.brightness}%) contrast(${state.contrast}%)`;
+}
+
+invertSlider.oninput = ()=>{ state.invert = +invertSlider.value; invertVal.textContent = invertSlider.value + '%'; updateCSSFilters(); };
+blurSlider.oninput = ()=>{ state.blur = +blurSlider.value; blurVal.textContent = blurSlider.value + 'px'; updateCSSFilters(); };
+brightSlider.oninput = ()=>{ state.brightness = +brightSlider.value; brightVal.textContent = brightSlider.value + '%'; updateCSSFilters(); };
+contrastSlider.oninput = ()=>{ state.contrast = +contrastSlider.value; contrastVal.textContent = contrastSlider.value + '%'; updateCSSFilters(); };
+
+/* ---------- MIDI ---------- */
+const midiBadge = document.getElementById('midiBadge');
+const midiStatus = document.getElementById('midiStatus');
+const ccMonitor = document.getElementById('ccMonitor');
+const channelSel = document.getElementById('channelSel');
+channelSel.onchange = ()=> state.channel = +channelSel.value;
+
+if(navigator.requestMIDIAccess){
+  navigator.requestMIDIAccess().then(access=>{
+    const inputs = [...access.inputs.values()];
+    if(inputs.length){
+      midiBadge.classList.add('on');
+      midiStatus.textContent = inputs.map(i=>i.name).join(', ');
+      inputs.forEach(inp=> inp.onmidimessage = handleMIDI);
+    } else {
+      midiStatus.textContent = 'kein Gerät gefunden';
+    }
+    access.onstatechange = ()=>{
+      const list = [...access.inputs.values()];
+      midiBadge.classList.toggle('on', list.length>0);
+      midiStatus.textContent = list.length? list.map(i=>i.name).join(', ') : 'kein Gerät gefunden';
+      list.forEach(inp=> inp.onmidimessage = handleMIDI);
+    };
+  }).catch(()=>{ midiStatus.textContent = 'Zugriff verweigert'; });
+} else {
+  midiStatus.textContent = 'Web MIDI nicht unterstützt (Chrome/Edge nutzen)';
+}
+
+function handleMIDI(msg){
+  const [status, cc, val] = msg.data;
+  if((status & 0xF0) !== 0xB0) return; // nur Control Change
+
+  const ch = (status & 0x0F) + 1;
+  const idx = state.channel - 1;
+
+  let label = '';
+  if(cc === MIDI_CC.slider[idx]) label = 'Fader -> Feedback';
+  else if(cc === MIDI_CC.knob[idx]) label = 'Knopf -> RGB-Shift';
+  else if(cc === MIDI_CC.solo[idx]) label = `S-Taste -> Nächster Clip (Layer ${state.activeLayer})`;
+  else if(cc === MIDI_CC.mute[idx]) label = 'M-Taste -> Strobe';
+  else if(cc === MIDI_CC.record[idx]) label = 'R-Taste -> Kaleidoskop';
+  else if(cc === MIDI_CC.mix[idx]) label = 'Fader -> Mix A/B';
+
+  ccMonitor.textContent = `Ch ${ch} | CC ${cc} = ${val}` + (label ? ` (${label})` : '');
+
+  if(cc === MIDI_CC.slider[idx]){
+    state.feedback = val/127; fbSlider.value = Math.round(state.feedback*100); fbVal.textContent = fbSlider.value;
+  } else if(cc === MIDI_CC.knob[idx]){
+    state.rgbShift = val/127*30; rgbSlider.value = Math.round(val/127*100); rgbVal.textContent = rgbSlider.value;
+  } else if(cc === MIDI_CC.solo[idx] && val>0){
+    const currentIdx = (state.activeLayer === 'A') ? state.layerA : state.layerB;
+    selectClip(currentIdx + 1);
+  } else if(cc === MIDI_CC.mute[idx] && val>0){
+    setStrobe(!state.strobe);
+  } else if(cc === MIDI_CC.record[idx] && val>0){
+    setKaleido(!state.kaleido);
+  } else if(cc === MIDI_CC.mix[idx]){
+    state.mix = Math.round(val/127*100);
+    mixSlider.value = state.mix;
+    mixVal.textContent = state.mix + '%';
+  }
+}
+
+/* ---------- Render Loop ---------- */
+let lastFpsUpdate = 0;
+let frameCount = 0;
+const fpsVal = document.getElementById('fpsVal');
+
+const effectCanvas = document.createElement('canvas');
+const effectCtx = effectCanvas.getContext('2d');
+const pixelCanvas = document.createElement('canvas');
+const pixelCtx = pixelCanvas.getContext('2d');
+
+let delayCanvases = [];
+let delayCtxs = [];
+let delayFrameCount = 0;
+
+function updateDelayBuffers(){
+  if(state.echo === 0){
+    if(delayCanvases.length > 0){
+      delayCanvases = [];
+      delayCtxs = [];
+    }
+    return;
+  }
+  
+  if(delayCanvases.length === 0){
+    for(let i=0; i<3; i++){
+      const c = document.createElement('canvas');
+      delayCanvases.push(c);
+      delayCtxs.push(c.getContext('2d'));
+    }
+  }
+  
+  delayCanvases.forEach(c=>{
+    if(c.width !== W || c.height !== H){
+      c.width = W;
+      c.height = H;
+    }
+  });
+  
+  delayFrameCount++;
+  if(delayFrameCount >= 6){
+    delayFrameCount = 0;
+    const lastCanvas = delayCanvases.pop();
+    const lastCtx = delayCtxs.pop();
+    lastCtx.clearRect(0, 0, W, H);
+    lastCtx.drawImage(stage, 0, 0);
+    delayCanvases.unshift(lastCanvas);
+    delayCtxs.unshift(lastCtx);
+  }
+}
+
+function draw(t){
+  requestAnimationFrame(draw);
+  updateAudio(t);
+
+  // FPS Counter
+  frameCount++;
+  if(t - lastFpsUpdate >= 1000){
+    const currentFps = Math.round((frameCount * 1000) / (t - lastFpsUpdate));
+    if (fpsVal) fpsVal.textContent = currentFps;
+    frameCount = 0;
+    lastFpsUpdate = t;
+  }
+
+  // Trail / Feedback
+  const fade = 1 - (0.06 + state.feedback*0.9);
+  ctx.fillStyle = `rgba(0,0,0,${Math.max(0.04, fade)})`;
+  ctx.fillRect(0,0,W,H);
+
+  if (state.freeze && freezeCanvas) {
+    ctx.drawImage(freezeCanvas, 0, 0, W, H);
+  } else {
+    // 1. Draw Layer A
+    if (state.layerA >= 0 && state.layerA < state.clips.length) {
+      const clipA = state.clips[state.layerA];
+      drawVideo(clipA.el, 1.0, 'source-over');
+    } else {
+      // Clear background if no Layer A
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // 2. Draw Layer B on top (blended)
+    if (state.layerB >= 0 && state.layerB < state.clips.length && state.mix > 0) {
+      const clipB = state.clips[state.layerB];
+      drawVideo(clipB.el, state.mix / 100, state.blendMode);
+    }
+  }
+
+  // Update Echo Buffers
+  updateDelayBuffers();
+
+  // Draw Echoes
+  if(state.echo > 0 && delayCanvases.length > 0){
+    ctx.save();
+    delayCanvases.forEach((c, idx)=>{
+      if(c.width === W && c.height === H){
+        ctx.globalAlpha = (state.echo / 100) * 0.3 * (1 - idx * 0.25);
+        ctx.globalCompositeOperation = 'screen';
+        const offset = (idx + 1) * 8 * (1 + state.audioBass * 0.5);
+        ctx.drawImage(c, offset, 0, W, H);
+      }
+    });
+    ctx.restore();
+  }
+
+  // Glitch Slices (Datamosh-style)
+  if(state.glitch > 0){
+    const threshold = state.audioLevel > 0 ? (0.3 - (state.glitch/100) * 0.1) : 0.5;
+    const rate = (state.glitch / 100) * 0.4;
+    if(Math.random() < rate && (state.audioLevel === 0 || state.audioBass > threshold)){
+      const numSlices = Math.floor(2 + (state.glitch / 100) * 12);
+      for(let i=0; i<numSlices; i++){
+        const sy = Math.random() * H;
+        const sh = Math.random() * (H * 0.2) + 5;
+        const disp = (Math.random() - 0.5) * (W * 0.1) * (state.glitch / 100) * (1 + state.audioBass);
+        ctx.drawImage(stage, 0, sy, W, sh, disp, sy, W, sh);
+      }
+    }
+  }
+
+  // Strobe
+  if(state.strobe){
+    const flash = Math.abs(Math.sin(t*0.02)) > 0.85 ? 0.9 : 0;
+    if(flash>0){
+      ctx.fillStyle = `rgba(255,255,255,${flash})`;
+      ctx.fillRect(0,0,W,H);
+    }
+  }
+
+  // Vignette
+  if(state.vignette > 0){
+    ctx.save();
+    const grad = ctx.createRadialGradient(W/2, H/2, Math.min(W, H) * 0.3, W/2, H/2, Math.max(W, H) * 0.8);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, `rgba(0,0,0,${state.vignette / 100})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+}
+
+function drawVideo(v, opacity, blendMode = 'source-over'){
+  if(v.readyState < 2) return;
+  
+  effectCanvas.width = W;
+  effectCanvas.height = H;
+  effectCtx.clearRect(0, 0, W, H);
+
+  const scale = Math.max(W/v.videoWidth, H/v.videoHeight);
+  const vw = v.videoWidth*scale, vh = v.videoHeight*scale;
+
+  const audioBoost = 1 + state.audioBass*0.6;
+  const shift = state.rgbShift * audioBoost;
+
+  effectCtx.save();
+  effectCtx.translate(W/2, H/2);
+
+  // Mirror
+  let scaleX = 1, scaleY = 1;
+  if(state.mirror === 'h' || state.mirror === 'both') scaleX = -1;
+  if(state.mirror === 'v' || state.mirror === 'both') scaleY = -1;
+
+  // Zoom Pulse
+  const zoom = 1 + (state.zoomPulse / 100) * state.audioBass * 0.25;
+  effectCtx.scale(scaleX * zoom, scaleY * zoom);
+
+  // Draw base video with Mosaic
+  if(state.mosaic > 0){
+    const factor = 1 / (1 + state.mosaic * 0.3);
+    const pw = Math.max(8, Math.round(vw * factor));
+    const ph = Math.max(8, Math.round(vh * factor));
+    pixelCanvas.width = pw;
+    pixelCanvas.height = ph;
+    pixelCtx.drawImage(v, 0, 0, pw, ph);
+    effectCtx.imageSmoothingEnabled = false;
+    effectCtx.drawImage(pixelCanvas, -vw/2, -vh/2, vw, vh);
+  } else {
+    effectCtx.imageSmoothingEnabled = true;
+    effectCtx.drawImage(v, -vw/2, -vh/2, vw, vh);
+  }
+
+  // RGB Shift
+  if(shift > 0.5){
+    effectCtx.globalCompositeOperation = 'screen';
+    effectCtx.globalAlpha = 0.6;
+    if(state.mosaic > 0){
+      effectCtx.drawImage(pixelCanvas, -vw/2 + shift, -vh/2, vw, vh);
+      effectCtx.drawImage(pixelCanvas, -vw/2 - shift, -vh/2, vw, vh);
+    } else {
+      effectCtx.drawImage(v, -vw/2 + shift, -vh/2, vw, vh);
+      effectCtx.drawImage(v, -vw/2 - shift, -vh/2, vw, vh);
+    }
+  }
+  effectCtx.restore();
+
+  // Draw final composition
+  ctx.save();
+  ctx.globalAlpha = opacity;
+
+  // Filter optimization
+  if(state.hue === 0 && state.audioLevel === 0){
+    ctx.filter = 'none';
+  } else {
+    ctx.filter = `hue-rotate(${state.hue}deg) saturate(${1+state.audioLevel*0.8})`;
+  }
+
+  if(state.kaleido){
+    drawKaleido(effectCanvas, opacity, blendMode);
+  } else {
+    ctx.globalCompositeOperation = blendMode;
+    ctx.drawImage(effectCanvas, 0, 0);
+  }
+  ctx.restore();
+}
+
+function drawKaleido(canvas, baseOpacity, blendMode = 'source-over'){
+  const segs = 6;
+  ctx.save();
+  ctx.translate(W/2, H/2);
+  for(let i=0;i<segs;i++){
+    ctx.save();
+    ctx.rotate((Math.PI*2/segs)*i + performance.now()*0.0002);
+    if(i%2===1) ctx.scale(-1,1);
+    ctx.globalCompositeOperation = i===0 ? blendMode : 'lighter';
+    ctx.globalAlpha = 0.85 * baseOpacity;
+    ctx.drawImage(canvas, -W/2, -H/2, W, H);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+requestAnimationFrame(draw);
+
+/* ---------- UI Utilities ---------- */
+document.getElementById('fsBtn').onclick = toggleFullscreen;
+document.getElementById('toggleBtn').onclick = togglePanel;
+function toggleFullscreen(){
+  if(!document.fullscreenElement) document.documentElement.requestFullscreen();
+  else document.exitFullscreen();
+}
+function togglePanel(){
+  document.getElementById('panel').classList.toggle('hidden');
+  document.getElementById('toggleBtn').style.left =
+    document.getElementById('panel').classList.contains('hidden') ? '10px' : '310px';
+}
+</script>
+</body>
+</html>
