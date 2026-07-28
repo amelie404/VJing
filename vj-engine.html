@@ -346,11 +346,51 @@ function renderClipList(){
     btnB.textContent = 'B';
     btnB.onclick = (e) => { e.stopPropagation(); selectClip(i, 'B'); };
     
+    const btnDel = document.createElement('button');
+    btnDel.className = 'layer-btn delete-btn';
+    btnDel.textContent = '×';
+    btnDel.style.borderColor = '#551111';
+    btnDel.style.color = '#ff5555';
+    btnDel.onclick = (e) => { e.stopPropagation(); removeClip(i); };
+    
     btnsDiv.appendChild(btnA);
     btnsDiv.appendChild(btnB);
+    btnsDiv.appendChild(btnDel);
     d.appendChild(btnsDiv);
     clipListEl.appendChild(d);
   });
+}
+
+function removeClip(i){
+  const clip = state.clips[i];
+  if(!clip) return;
+  console.log(`removeClip: Index=${i}, Name=${clip.name}`);
+
+  if(typeof clip.el.pause === 'function') {
+    clip.el.pause();
+  }
+  clip.el.remove();
+  
+  if(clip.url && clip.url.startsWith('blob:')){
+    URL.revokeObjectURL(clip.url);
+  }
+
+  state.clips.splice(i, 1);
+
+  if(state.layerA === i){
+    state.layerA = -1;
+  } else if(state.layerA > i){
+    state.layerA--;
+  }
+
+  if(state.layerB === i){
+    state.layerB = -1;
+  } else if(state.layerB > i){
+    state.layerB--;
+  }
+
+  updateVideoPlayStates();
+  renderClipList();
 }
 
 function updateVideoPlayStates(){
