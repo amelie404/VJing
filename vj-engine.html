@@ -55,6 +55,22 @@
   .layer-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
   .badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:#444;margin-right:5px;}
   .badge.on{background:var(--accent);box-shadow:0 0 6px var(--accent);}
+  #recLoopBtn{
+    background:#330a0a;color:#ff4444;border:1px solid #661111;
+    padding:5px;border-radius:3px;cursor:pointer;font-family:var(--mono);font-size:9px;
+    margin-top:4px;width:100%;transition:all 0.2s ease;
+    text-transform:uppercase;font-weight:bold;
+  }
+  #recLoopBtn:hover{background:#4d0f0f;border-color:#aa2222;}
+  #recLoopBtn.recording{
+    background:#ff0000 !important;color:#000 !important;border-color:#ff0000 !important;
+    box-shadow:0 0 8px #ff0000;
+    animation:recPulse 0.8s infinite alternate;
+  }
+  @keyframes recPulse{
+    from{opacity:1;}
+    to{opacity:0.5;}
+  }
   .midiRow{font-size:9px;color:var(--dim);}
   .hint{color:var(--dim);font-size:9px;margin-top:2px;}
   #toggleBtn{
@@ -87,6 +103,7 @@
   <h2>Video-Bank</h2>
   <input type="file" id="fileInput" accept="video/*" multiple>
   <div class="clips" id="clipList"></div>
+  <button id="recLoopBtn">Loop aufnehmen (REC)</button>
   <div class="row">
     <label>Fokus-Layer</label>
     <select id="focusSel">
@@ -269,6 +286,7 @@ const state = {
   strobe: false,
   audioLevel: 0,
   audioBass: 0,
+  isRecording: false,
 };
 
 addEventListener('resize', resize); resize();
@@ -393,6 +411,7 @@ addEventListener('keydown', e=>{
   if(e.key==='ArrowLeft') selectClip(currentIdx - 1);
   if(e.key==='f' || e.key==='F') toggleFullscreen();
   if(e.key==='h' || e.key==='H') togglePanel();
+  if(e.key==='r' || e.key==='R') toggleRecording();
   if(e.code === 'Space'){
     if(!state.freeze) setFreeze(true);
     e.preventDefault();
@@ -631,6 +650,7 @@ function handleMIDI(msg){
   else if(cc === MIDI_CC.mute[idx]) label = 'M-Taste -> Strobe';
   else if(cc === MIDI_CC.record[idx]) label = 'R-Taste -> Kaleidoskop';
   else if(cc === MIDI_CC.mix[idx]) label = 'Fader -> Mix A/B';
+  else if(cc === 45) label = 'Hardware REC -> Loop Aufnahme';
 
   ccMonitor.textContent = `Ch ${ch} | CC ${cc} = ${val}` + (label ? ` (${label})` : '');
 
@@ -649,6 +669,8 @@ function handleMIDI(msg){
     state.mix = Math.round(val/127*100);
     mixSlider.value = state.mix;
     mixVal.textContent = state.mix + '%';
+  } else if(cc === 45 && val>0){
+    toggleRecording();
   }
 }
 
@@ -907,6 +929,92 @@ function togglePanel(){
   document.getElementById('toggleBtn').style.left =
     document.getElementById('panel').classList.contains('hidden') ? '10px' : '310px';
 }
+
+/* ---------- Loop Aufnahme (Resampling) ---------- */
+let mediaRecorder = null;
+let recordedChunks = [];
+
+function toggleRecording(){
+  if(state.isRecording){
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+function startRecording(){
+  recordedChunks = [];
+  const stream = stage.captureStream(30);
+  
+  let options = { mimeType: 'video/webm;codecs=vp9' };
+  if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+    options = { mimeType: 'video/webm;codecs=vp8' };
+  }
+  if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+    options = { mimeType: 'video/webm' };
+  }
+  
+  try {
+    mediaRecorder = new MediaRecorder(stream, options);
+  } catch(e) {
+    console.error('MediaRecorder initialization failed:', e);
+    alert('MediaRecorder konnte nicht gestartet werden: ' + e.message);
+    return;
+  }
+  
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      recordedChunks.push(e.data);
+    }
+  };
+  
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    
+    // In DOM einhängen gegen Throttling
+    const el = document.createElement('video');
+    el.src = url;
+    el.loop = true;
+    el.muted = true;
+    el.playsInline = true;
+    el.crossOrigin = 'anonymous';
+    el.preload = 'auto';
+    document.getElementById('videoContainer').appendChild(el);
+    el.load();
+    
+    // Zur Video-Bank hinzufügen
+    const name = `LoopRec_${new Date().toLocaleTimeString().replace(/:/g, '-')}.webm`;
+    state.clips.push({ url, el, name });
+    renderClipList();
+    
+    console.log(`Neuer Loop aufgenommen und hinzugefügt: ${name}`);
+  };
+  
+  mediaRecorder.start();
+  state.isRecording = true;
+  updateRecordingUI();
+}
+
+function stopRecording(){
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  state.isRecording = false;
+  updateRecordingUI();
+}
+
+const recLoopBtn = document.getElementById('recLoopBtn');
+function updateRecordingUI(){
+  if(state.isRecording){
+    recLoopBtn.textContent = 'AUFNAHME STOPPEN...';
+    recLoopBtn.classList.add('recording');
+  } else {
+    recLoopBtn.textContent = 'Loop aufnehmen (REC)';
+    recLoopBtn.classList.remove('recording');
+  }
+}
+recLoopBtn.onclick = toggleRecording;
 </script>
 </body>
 </html>
