@@ -101,7 +101,7 @@
   <div class="hint">Muss zur physischen Monitor-Position UND zur nanoKONTROL2-Spur (1-4) passen.</div>
 
   <h2>Video-Bank</h2>
-  <input type="file" id="fileInput" accept="video/*" multiple>
+  <input type="file" id="fileInput" accept="video/*,image/*" multiple>
   <div class="clips" id="clipList"></div>
   <button id="recLoopBtn">Loop aufnehmen (REC)</button>
   <div class="row">
@@ -298,13 +298,22 @@ const clipListEl = document.getElementById('clipList');
 fileInput.addEventListener('change', e=>{
   [...e.target.files].forEach(f=>{
     const url = URL.createObjectURL(f);
-    const el = document.createElement('video');
-    el.src = url; el.loop = true; el.muted = true; el.playsInline = true;
-    el.crossOrigin = 'anonymous';
-    el.preload = 'auto';
-    document.getElementById('videoContainer').appendChild(el);
-    el.load();
-    state.clips.push({url, el, name:f.name});
+    const isImg = f.type.startsWith('image/');
+    let el;
+    if (isImg) {
+      el = document.createElement('img');
+      el.src = url;
+      el.crossOrigin = 'anonymous';
+      document.getElementById('videoContainer').appendChild(el);
+    } else {
+      el = document.createElement('video');
+      el.src = url; el.loop = true; el.muted = true; el.playsInline = true;
+      el.crossOrigin = 'anonymous';
+      el.preload = 'auto';
+      document.getElementById('videoContainer').appendChild(el);
+      el.load();
+    }
+    state.clips.push({url, el, name:f.name, isImage: isImg});
   });
   renderClipList();
   if(state.layerA === -1 && state.layerB === -1 && state.clips.length){
@@ -346,6 +355,7 @@ function renderClipList(){
 
 function updateVideoPlayStates(){
   state.clips.forEach((c, idx) => {
+    if (c.isImage) return;
     const isActive = (idx === state.layerA || idx === state.layerB);
     if(isActive){
       if(c.el.paused){
@@ -366,12 +376,15 @@ function selectClip(i, targetLayer = null){
   console.log(`selectClip: Index=${i}, Layer=${layer}, Explicit=${targetLayer !== null}`);
 
   const currentIdx = (layer === 'A') ? state.layerA : state.layerB;
+  const clip = state.clips[i];
 
   if (targetLayer === null && currentIdx === i) {
-    const v = state.clips[i].el;
-    v.currentTime = 0;
-    v.play().catch(()=>{});
-    console.log(`Clip ${i} auf Layer ${layer} neu gestartet.`);
+    if (!clip.isImage) {
+      const v = clip.el;
+      v.currentTime = 0;
+      v.play().catch(()=>{});
+      console.log(`Clip ${i} auf Layer ${layer} neu gestartet.`);
+    }
     return;
   }
 
@@ -381,9 +394,11 @@ function selectClip(i, targetLayer = null){
       console.log(`Layer A entladen.`);
     } else {
       state.layerA = i;
-      const v = state.clips[i].el;
-      v.currentTime = 0;
-      v.play().catch(()=>{});
+      if (!clip.isImage) {
+        const v = clip.el;
+        v.currentTime = 0;
+        v.play().catch(()=>{});
+      }
       console.log(`Layer A: Clip ${i} geladen.`);
     }
   } else {
@@ -392,9 +407,11 @@ function selectClip(i, targetLayer = null){
       console.log(`Layer B entladen.`);
     } else {
       state.layerB = i;
-      const v = state.clips[i].el;
-      v.currentTime = 0;
-      v.play().catch(()=>{});
+      if (!clip.isImage) {
+        const v = clip.el;
+        v.currentTime = 0;
+        v.play().catch(()=>{});
+      }
       console.log(`Layer B: Clip ${i} geladen.`);
     }
   }
@@ -826,14 +843,22 @@ function draw(t){
 }
 
 function drawVideo(v, opacity, blendMode = 'source-over'){
-  if(v.readyState < 2) return;
+  const isImg = v.tagName.toLowerCase() === 'img';
+  if(isImg){
+    if(!v.complete || v.naturalWidth === 0) return;
+  } else {
+    if(v.readyState < 2) return;
+  }
   
   effectCanvas.width = W;
   effectCanvas.height = H;
   effectCtx.clearRect(0, 0, W, H);
 
-  const scale = Math.max(W/v.videoWidth, H/v.videoHeight);
-  const vw = v.videoWidth*scale, vh = v.videoHeight*scale;
+  const mediaW = isImg ? v.naturalWidth : v.videoWidth;
+  const mediaH = isImg ? v.naturalHeight : v.videoHeight;
+
+  const scale = Math.max(W/mediaW, H/mediaH);
+  const vw = mediaW*scale, vh = mediaH*scale;
 
   const audioBoost = 1 + state.audioBass*0.6;
   const shift = state.rgbShift * audioBoost;
