@@ -162,8 +162,10 @@
   </div>
   <div class="hint" id="connStatus">Verbindet mit Output-Fenstern&hellip;</div>
 
-  <button id="blackoutBtn">&#9632; BLACKOUT (Fokus-Screen)</button>
-  <button id="blackoutAllBtn">&#9632;&#9632; BLACKOUT ALLE (Notfall)</button>
+  <div class="row" style="gap:6px; margin-top:6px;">
+    <button id="blackoutBtn" style="margin-top:0; flex:1; padding:10px 5px;">&#9632; BLACKOUT (Fokus)</button>
+    <button id="blackoutAllBtn" style="margin-top:0; flex:1; padding:10px 5px; border-color:#882222; color:#ff8888;">&#9632;&#9632; BLACKOUT ALLE</button>
+  </div>
 
   <h2>Video-Bank <span class="hint">(gilt für alle 4 Screens)</span></h2>
   <input type="file" id="fileInput" accept="video/*,image/*" multiple>
@@ -382,7 +384,7 @@
   <button id="fsBtn">Vollbild (F)</button>
 </div>
 
-<div id="videoContainer" style="display:none;"></div>
+<div id="videoContainer" style="position:absolute; width:0; height:0; overflow:hidden; opacity:0.001; pointer-events:none;"></div>
 
 <script>
 /* ============ KONFIGURATION ============
@@ -504,6 +506,7 @@ function syncClipsFromBank(bankMeta){
     } else {
       el = document.createElement('video');
       el.src = localUrl; el.loop = true; el.muted = true; el.playsInline = true; el.preload = 'auto';
+      if(!localUrl.startsWith('blob:')) el.crossOrigin = 'anonymous';
       el.load();
     }
     container.appendChild(el);
@@ -535,7 +538,7 @@ controlChannel.onmessage = (e)=>{
       const url = URL.createObjectURL(msg.blob);
       const el = document.createElement('video');
       el.src = url; el.loop = true; el.muted = true; el.playsInline = true;
-      el.crossOrigin = 'anonymous';
+      if(!url.startsWith('blob:')) el.crossOrigin = 'anonymous';
       el.preload = 'auto';
       document.getElementById('videoContainer').appendChild(el);
       el.load();
@@ -596,12 +599,12 @@ fileInput.addEventListener('change', e=>{
     if (isImg) {
       el = document.createElement('img');
       el.src = url;
-      el.crossOrigin = 'anonymous';
+      if(!url.startsWith('blob:')) el.crossOrigin = 'anonymous';
       document.getElementById('videoContainer').appendChild(el);
     } else {
       el = document.createElement('video');
       el.src = url; el.loop = true; el.muted = true; el.playsInline = true;
-      el.crossOrigin = 'anonymous';
+      if(!url.startsWith('blob:')) el.crossOrigin = 'anonymous';
       el.preload = 'auto';
       document.getElementById('videoContainer').appendChild(el);
       el.load();
@@ -969,6 +972,9 @@ const blackoutBtn = document.getElementById('blackoutBtn');
 function setBlackout(v){
   state.blackout = v;
   blackoutBtn.classList.toggle('active', v);
+  broadcastState(focusScreen);
+  const allBlack = [1,2,3,4].every(n => screenStates[n].blackout);
+  blackoutAllBtn.classList.toggle('active', allBlack);
 }
 blackoutBtn.onclick = ()=> setBlackout(!state.blackout);
 
@@ -1874,6 +1880,8 @@ function applyPresetState(data = {}){
 
   focusSel.value = state.activeLayer;
   blackoutBtn.classList.toggle('active', !!state.blackout);
+  const allBlack = [1,2,3,4].every(n => screenStates[n].blackout);
+  blackoutAllBtn.classList.toggle('active', allBlack);
   document.querySelectorAll('.smbtn').forEach(btn=>{
     const layer = btn.dataset.layer;
     const kind = btn.classList.contains('mute') ? 'layerMute' : 'layerSolo';
