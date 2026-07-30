@@ -515,7 +515,7 @@ controlChannel.onmessage = (e)=>{
       broadcastState(msg.screen);
       updateConnStatus(msg.screen, true);
     } else if(msg.type === 'new-recorded-clip'){
-      // In die Video-Bank einladen
+      // In die Video-Bank einladen (läuft auf dem Controller)
       const url = URL.createObjectURL(msg.blob);
       const el = document.createElement('video');
       el.src = url; el.loop = true; el.muted = true; el.playsInline = true;
@@ -530,7 +530,7 @@ controlChannel.onmessage = (e)=>{
       renderClipList();
       broadcastClipbank();
       
-      // Falls auf Fokus-Layer noch nichts geladen ist, den neuen Loop direkt laden
+      // Falls auf dem Fokus-Layer noch nichts geladen ist, den neuen Loop direkt dort laden
       const key = LAYER_KEYS[state.activeLayer];
       if(state[key] === -1){
         selectClip(clips.length - 1);
