@@ -466,32 +466,48 @@ function broadcastState(screenNum){
 
 function broadcastClipbank(){
   if(!IS_CONTROLLER) return;
-  const meta = clips.map(c => ({url: c.url, name: c.name, isImage: !!c.isImage}));
+  const meta = clips.map(c => ({file: c.file, name: c.name, isImage: !!c.isImage}));
   controlChannel.postMessage({type:'clipbank', clips: meta});
 }
 
 // Output-Fenster: eigene Video-/Bild-Elemente passend zur vom Controller gemeldeten
-// Bank aufbauen. Blob-URLs sind vom selben Ursprung (gleiche Datei) auch in anderen
-// Fenstern gültig, jedes Fenster bekommt aber seine eigenen <video>/<img>-Elemente,
-// damit Wiedergabe/Loop-Position pro Fenster unabhängig bleibt.
+// Bank aufbauen. Wir erstellen lokale Blob-URLs aus den empfangenen File/Blob-Objekten,
+// da Blob-URLs nicht fensterübergreifend gültig sind.
 function syncClipsFromBank(bankMeta){
   const container = document.getElementById('videoContainer');
-  clips = bankMeta.map((meta, i) => {
-    const existing = clips[i];
-    if(existing && existing.url === meta.url && existing.isImage === meta.isImage){
-      return existing; // unverändert -> Element behalten, Wiedergabe läuft weiter
+  
+  // 1. Zuerst Clips entfernen, die in der neuen Liste nicht mehr existieren
+  const newNames = new Set(bankMeta.map(m => m.name));
+  clips.forEach(c => {
+    if(!newNames.has(c.name)){
+      console.log(`syncClipsFromBank: Entferne gelöschten Clip: ${c.name}`);
+      if(typeof c.el.pause === 'function') c.el.pause();
+      c.el.remove();
+      if(c.url && c.url.startsWith('blob:')){
+        URL.revokeObjectURL(c.url);
+      }
     }
+  });
+
+  // 2. Neue Liste mappen, bestehende Elemente per Name wiederverwenden (verhindert Ruckler bei Index-Verschiebungen)
+  clips = bankMeta.map((meta, i) => {
+    const existing = clips.find(c => c.name === meta.name && c.isImage === meta.isImage);
+    if(existing){
+      return existing; // bereits geladen -> behalten, Wiedergabe läuft ruckelfrei weiter
+    }
+
+    const localUrl = URL.createObjectURL(meta.file);
     let el;
     if(meta.isImage){
       el = document.createElement('img');
-      el.src = meta.url;
+      el.src = localUrl;
     } else {
       el = document.createElement('video');
-      el.src = meta.url; el.loop = true; el.muted = true; el.playsInline = true; el.preload = 'auto';
+      el.src = localUrl; el.loop = true; el.muted = true; el.playsInline = true; el.preload = 'auto';
       el.load();
     }
     container.appendChild(el);
-    return { url: meta.url, name: meta.name, isImage: meta.isImage, el, thumb: null };
+    return { url: localUrl, name: meta.name, isImage: meta.isImage, file: meta.file, el, thumb: null };
   });
   if(typeof updateVideoPlayStates === 'function') updateVideoPlayStates();
 }
@@ -515,7 +531,7 @@ controlChannel.onmessage = (e)=>{
       broadcastState(msg.screen);
       updateConnStatus(msg.screen, true);
     } else if(msg.type === 'new-recorded-clip'){
-      // In die Video-Bank einladen
+      // In die Video-Bank einladen (läuft auf dem Controller)
       const url = URL.createObjectURL(msg.blob);
       const el = document.createElement('video');
       el.src = url; el.loop = true; el.muted = true; el.playsInline = true;
@@ -530,7 +546,7 @@ controlChannel.onmessage = (e)=>{
       renderClipList();
       broadcastClipbank();
       
-      // Falls auf Fokus-Layer noch nichts geladen ist, den neuen Loop direkt laden
+      // Falls auf dem Fokus-Layer noch nichts geladen ist, den neuen Loop direkt dort laden
       const key = LAYER_KEYS[state.activeLayer];
       if(state[key] === -1){
         selectClip(clips.length - 1);
@@ -590,7 +606,7 @@ fileInput.addEventListener('change', e=>{
       document.getElementById('videoContainer').appendChild(el);
       el.load();
     }
-    const clip = {url, el, name:f.name, isImage: isImg, thumb: null};
+    const clip = {url, el, name:f.name, isImage: isImg, file: f, thumb: null};
     clips.push(clip);
     generateThumb(clip);
   });
