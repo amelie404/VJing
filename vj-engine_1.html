@@ -160,10 +160,17 @@
       <option value="3">Screen 3</option><option value="4">Screen 4</option>
     </select>
   </div>
+  <div class="row" style="margin-top:6px; font-weight:bold;">
+    <label style="display:flex; align-items:center; gap:6px; cursor:pointer; color:#df8de3;">
+      <input type="checkbox" id="linkAllChk" style="width:16px; height:16px; margin:0;">
+      Screens verlinken (Gleichschaltung)
+    </label>
+  </div>
   <div class="hint" id="connStatus">Verbindet mit Output-Fenstern&hellip;</div>
 
   <div class="row" style="gap:6px; margin-top:6px;">
     <button id="blackoutBtn" style="margin-top:0; flex:1; padding:10px 5px;">&#9632; BLACKOUT (Fokus)</button>
+    <button id="stopBtn" style="margin-top:0; flex:1; padding:10px 5px; border-color:#883333; color:#ff9999; background:#441111;">&#9632; STOP (Entladen)</button>
     <button id="blackoutAllBtn" style="margin-top:0; flex:1; padding:10px 5px; border-color:#882222; color:#ff8888;">&#9632;&#9632; BLACKOUT ALLE</button>
   </div>
 
@@ -384,7 +391,7 @@
   <button id="fsBtn">Vollbild (F)</button>
 </div>
 
-<div id="videoContainer" style="position:absolute; width:0; height:0; overflow:hidden; opacity:0.001; pointer-events:none;"></div>
+<div id="videoContainer" style="position:fixed; bottom:0; left:0; width:1px; height:1px; overflow:hidden; z-index:-1; pointer-events:none;"></div>
 
 <script>
 /* ============ KONFIGURATION ============
@@ -392,12 +399,16 @@
    Falls dein Controller anders belegt ist: unten im "CC Monitor" im Panel
    nachsehen, welche CC-Nummer beim Drehen/Drücken auftaucht, und hier anpassen. */
 const MIDI_CC = {
-  slider: [0,1,2,3],   // Spur 1-4 Fader  -> Feedback
-  knob:   [16,17,18,19], // Spur 1-4 Knopf -> RGB-Shift
-  solo:   [32,33,34,35], // S-Buttons      -> nächster Clip
-  mute:   [48,49,50,51], // M-Buttons      -> Strobe toggle
-  record: [64,65,66,67], // R-Buttons      -> Kaleidoskop toggle
-  mix:    [4,5,6,7],     // Spur 5-8 Fader  -> Mix A/B
+  slider1_4: [0,1,2,3],    // Mix A/B (Screens 1-4)
+  knob1_4:   [16,17,18,19], // RGB Shift (Screens 1-4)
+  slider5_8: [4,5,6,7],     // Colorizer Strength (Screens 1-4)
+  knob5_8:   [20,21,22,23], // Warp / Wellenverzerrung (Screens 1-4)
+  solo1_4:   [32,33,34,35], // Strobe Toggle (Screens 1-4)
+  mute1_4:   [48,49,50,51], // Kaleido Toggle (Screens 1-4)
+  rec1_4:    [64,65,66,67], // Feedback Toggle (Screens 1-4)
+  solo5_8:   [36,37,38,39], // Nächster Clip (Screens 1-4)
+  mute5_8:   [52,53,54,55], // Colorizer Style Wechsel (Screens 1-4)
+  rec5_8:    [68,69,70,71], // Glitch Toggle (Screens 1-4)
 };
 /* ======================================= */
 
@@ -468,13 +479,13 @@ function broadcastState(screenNum){
 
 function broadcastClipbank(){
   if(!IS_CONTROLLER) return;
-  const meta = clips.map(c => ({file: c.file, name: c.name, isImage: !!c.isImage}));
+  const meta = clips.map(c => ({buffer: c.buffer, type: c.type, name: c.name, isImage: !!c.isImage}));
   controlChannel.postMessage({type:'clipbank', clips: meta});
 }
 
 // Output-Fenster: eigene Video-/Bild-Elemente passend zur vom Controller gemeldeten
-// Bank aufbauen. Wir erstellen lokale Blob-URLs aus den empfangenen File/Blob-Objekten,
-// da Blob-URLs nicht fensterübergreifend gültig sind.
+// Bank aufbauen. Wir erstellen lokale Blobs aus den empfangenen ArrayBuffers,
+// um WebKits Sandbox-Einschränkungen bei File-Clonings komplett zu umgehen.
 function syncClipsFromBank(bankMeta){
   const container = document.getElementById('videoContainer');
   
@@ -498,7 +509,9 @@ function syncClipsFromBank(bankMeta){
       return existing; // bereits geladen -> behalten, Wiedergabe läuft ruckelfrei weiter
     }
 
-    const localUrl = URL.createObjectURL(meta.file);
+    // Lokales Blob aus ArrayBuffer erzeugen (mit Uint8Array für maximale WebKit-Kompatibilität)
+    const blob = new Blob([new Uint8Array(meta.buffer)], {type: meta.type});
+    const localUrl = URL.createObjectURL(blob);
     let el;
     if(meta.isImage){
       el = document.createElement('img');
@@ -510,7 +523,7 @@ function syncClipsFromBank(bankMeta){
       el.load();
     }
     container.appendChild(el);
-    return { url: localUrl, name: meta.name, isImage: meta.isImage, file: meta.file, el, thumb: null };
+    return { url: localUrl, name: meta.name, isImage: meta.isImage, buffer: meta.buffer, type: meta.type, el, thumb: null };
   });
   if(typeof updateVideoPlayStates === 'function') updateVideoPlayStates();
 }
@@ -535,7 +548,8 @@ controlChannel.onmessage = (e)=>{
       updateConnStatus(msg.screen, true);
     } else if(msg.type === 'new-recorded-clip'){
       // In die Video-Bank einladen (läuft auf dem Controller)
-      const url = URL.createObjectURL(msg.blob);
+      const blob = new Blob([new Uint8Array(msg.buffer)], {type: msg.mimeType});
+      const url = URL.createObjectURL(blob);
       const el = document.createElement('video');
       el.src = url; el.loop = true; el.muted = true; el.playsInline = true;
       if(!url.startsWith('blob:')) el.crossOrigin = 'anonymous';
@@ -543,7 +557,7 @@ controlChannel.onmessage = (e)=>{
       document.getElementById('videoContainer').appendChild(el);
       el.load();
 
-      const clip = {url, el, name: msg.name, isImage: false, thumb: null};
+      const clip = {url, el, name: msg.name, isImage: false, buffer: msg.buffer, type: msg.mimeType, thumb: null};
       clips.push(clip);
       generateThumb(clip);
       renderClipList();
@@ -564,10 +578,27 @@ if(IS_OUTPUT){
 }
 
 if(IS_CONTROLLER){
-  // Alle 4 Screens regelmäßig synchronisieren -- deutlich robuster und risikoärmer,
-  // als jeden einzelnen Regler-Handler im Code einzeln mit einem Broadcast-Aufruf
-  // zu versehen. 120ms ist für UI-Werte unmerklich, aber genug für flüssige Regler.
-  setInterval(()=>{ for(let n=1;n<=4;n++) broadcastState(n); }, 120);
+  // Alle 4 Screens regelmäßig synchronisieren -- deutlich robuster und risikoärmer.
+  // Wenn verlinkt (linkAll), kopieren wir den Zustand des Fokus-Screens kontinuierlich auf alle anderen.
+  setInterval(()=>{
+    if(linkAll){
+      const srcState = screenStates[focusScreen];
+      [1,2,3,4].forEach(n => {
+        if(n !== focusScreen){
+          Object.keys(srcState).forEach(key => {
+            if(key !== 'channel' && key !== 'isRecording'){
+              if(typeof srcState[key] === 'object' && srcState[key] !== null){
+                screenStates[n][key] = JSON.parse(JSON.stringify(srcState[key]));
+              } else {
+                screenStates[n][key] = srcState[key];
+              }
+            }
+          });
+        }
+      });
+    }
+    for(let n=1;n<=4;n++) broadcastState(n);
+  }, 120);
 }
 
 const connectedScreens = new Set();
@@ -591,10 +622,16 @@ addEventListener('resize', resize); resize();
 const fileInput = document.getElementById('fileInput');
 const clipListEl = document.getElementById('clipList');
 
-fileInput.addEventListener('change', e=>{
-  [...e.target.files].forEach(f=>{
-    const url = URL.createObjectURL(f);
+fileInput.addEventListener('change', async e=>{
+  const files = [...e.target.files];
+  for(const f of files){
     const isImg = f.type.startsWith('image/');
+    const isVid = f.type.startsWith('video/');
+    if(!isImg && !isVid){
+      alert(`Ungültige Datei "${f.name}": Bitte nur Bilder oder Videos auswählen.`);
+      continue;
+    }
+    const url = URL.createObjectURL(f);
     let el;
     if (isImg) {
       el = document.createElement('img');
@@ -609,10 +646,14 @@ fileInput.addEventListener('change', e=>{
       document.getElementById('videoContainer').appendChild(el);
       el.load();
     }
-    const clip = {url, el, name:f.name, isImage: isImg, file: f, thumb: null};
+    
+    // ArrayBuffer einlesen, um WebKits Sandbox-Einschränkungen zu umgehen
+    const buffer = await f.arrayBuffer();
+    
+    const clip = {url, el, name:f.name, isImage: isImg, buffer, type: f.type, thumb: null};
     clips.push(clip);
     generateThumb(clip);
-  });
+  }
   renderClipList();
   broadcastClipbank();
   if(state.layerA === -1 && state.layerB === -1 && clips.length){
@@ -745,7 +786,9 @@ function updateVideoPlayStates(){
     const isActive = (idx === state.layerA || idx === state.layerB || idx === state.layerC || idx === state.layerD);
     if(isActive){
       if(c.el.paused){
-        c.el.play().catch(()=>{});
+        c.el.play().catch((err)=>{
+          console.error(`Fehler beim Abspielen von Clip "${c.name}":`, err);
+        });
       }
     } else {
       if(!c.el.paused){
@@ -889,7 +932,7 @@ const rgbVal = document.getElementById('rgbVal');
 const hueVal = document.getElementById('hueVal');
 
 fbSlider.oninput = ()=>{ state.feedback = fbSlider.value/100; fbVal.textContent = fbSlider.value; };
-rgbSlider.oninput = ()=>{ state.rgbShift = rgbSlider.value/100*30; rgbVal.textContent = rgbSlider.value; };
+rgbSlider.oninput = ()=>{ state.rgbShift = rgbSlider.value/100*90; rgbVal.textContent = rgbSlider.value; };
 hueSlider.oninput = ()=>{ state.hue = +hueSlider.value; hueVal.textContent = hueSlider.value; };
 
 const fbZoomSlider = document.getElementById('fbZoomSlider');
@@ -978,6 +1021,33 @@ function setBlackout(v){
 }
 blackoutBtn.onclick = ()=> setBlackout(!state.blackout);
 
+const stopBtn = document.getElementById('stopBtn');
+function stopAllClips(){
+  if(linkAll){
+    [1,2,3,4].forEach(n => {
+      screenStates[n].layerA = -1;
+      screenStates[n].layerB = -1;
+      screenStates[n].layerC = -1;
+      screenStates[n].layerD = -1;
+      broadcastState(n);
+    });
+  } else {
+    state.layerA = -1;
+    state.layerB = -1;
+    state.layerC = -1;
+    state.layerD = -1;
+    broadcastState(focusScreen);
+  }
+  updateVideoPlayStates();
+  renderClipList();
+  refreshControlsFromState();
+}
+if(IS_CONTROLLER){
+  stopBtn.onclick = stopAllClips;
+} else {
+  stopBtn.style.display = 'none';
+}
+
 const blackoutAllBtn = document.getElementById('blackoutAllBtn');
 if(IS_CONTROLLER){
   blackoutAllBtn.onclick = ()=>{
@@ -1017,6 +1087,7 @@ function getBeatPhase(){
 
 addEventListener('keydown', e=>{
   if(e.key==='b' || e.key==='B') setBlackout(!state.blackout);
+  if(e.key==='Escape') stopAllClips();
 });
 
 const qualitySel = document.getElementById('qualitySel');
@@ -1140,14 +1211,43 @@ const midiBadge = document.getElementById('midiBadge');
 const midiStatus = document.getElementById('midiStatus');
 const ccMonitor = document.getElementById('ccMonitor');
 const channelSel = document.getElementById('channelSel');
+const linkAllChk = document.getElementById('linkAllChk');
+let linkAll = false;
+
 if(IS_CONTROLLER){
   channelSel.onchange = ()=>{
     focusScreen = +channelSel.value;
     state = screenStates[focusScreen];
     refreshControlsFromState();
   };
+  
+  linkAllChk.onchange = ()=>{
+    linkAll = linkAllChk.checked;
+    if(linkAll){
+      // Alle Screens an den aktuell fokussierten Screen angleichen
+      const srcState = screenStates[focusScreen];
+      [1,2,3,4].forEach(n => {
+        if(n !== focusScreen){
+          Object.keys(srcState).forEach(key => {
+            if(key !== 'channel' && key !== 'isRecording'){
+              if(typeof srcState[key] === 'object' && srcState[key] !== null){
+                screenStates[n][key] = JSON.parse(JSON.stringify(srcState[key]));
+              } else {
+                screenStates[n][key] = srcState[key];
+              }
+            }
+          });
+          broadcastState(n);
+        }
+      });
+    }
+  };
 } else {
-  channelSel.parentElement.style.display = 'none'; // im Output-Fenster irrelevant
+  channelSel.parentElement.style.display = 'none';
+  if(linkAllChk) {
+    const parentRow = linkAllChk.closest('.row');
+    if(parentRow) parentRow.style.display = 'none';
+  }
 }
 
 if(IS_CONTROLLER && navigator.requestMIDIAccess){
@@ -1187,33 +1287,75 @@ function handleMIDI(msg){
     return;
   }
 
+  // CC 42: Stop (Clips auf fokussiertem Screen/allen Screens entladen)
+  if(cc === 42 && val > 0){
+    stopAllClips();
+    ccMonitor.textContent = `Ch ${ch} | CC ${cc} = ${val} | Transport STOP -> Clips entladen`;
+    return;
+  }
+
   for(let idx=0; idx<4; idx++){
     const screenNum = idx + 1;
     const s = screenStates[screenNum];
     let label = '';
+    let updateFn = null;
 
-    if(cc === MIDI_CC.slider[idx]){
-      s.feedback = val/127; label = 'Fader -> Feedback';
-    } else if(cc === MIDI_CC.knob[idx]){
-      s.rgbShift = val/127*30; label = 'Knopf -> RGB-Shift';
-    } else if(cc === MIDI_CC.solo[idx] && val>0){
-      const key = LAYER_KEYS[s.activeLayer];
-      s[key] = (s[key] + 1 + clips.length) % Math.max(1, clips.length);
-      if(clips.length === 0) s[key] = -1;
-      label = `S-Taste -> Nächster Clip (Layer ${s.activeLayer})`;
-    } else if(cc === MIDI_CC.mute[idx] && val>0){
-      s.strobe = !s.strobe; label = 'M-Taste -> Strobe';
-    } else if(cc === MIDI_CC.record[idx] && val>0){
-      s.kaleido = !s.kaleido; label = 'R-Taste -> Kaleidoskop';
-    } else if(cc === MIDI_CC.mix[idx]){
-      s.mix = Math.round(val/127*100); label = 'Fader -> Mix A/B';
+    if(cc === MIDI_CC.slider1_4[idx]){
+      updateFn = (targetState) => { targetState.mix = Math.round(val/127*100); };
+      label = 'Fader 1-4 -> Mix A/B';
+    } else if(cc === MIDI_CC.knob1_4[idx]){
+      updateFn = (targetState) => { targetState.rgbShift = val/127*90; }; // Stärkeres RGB-Shift (bis 90px!)
+      label = 'Knopf 1-4 -> RGB-Shift';
+    } else if(cc === MIDI_CC.slider5_8[idx]){
+      updateFn = (targetState) => { targetState.colorizerStrength = Math.round(val/127*100); };
+      label = 'Fader 5-8 -> Color Strength';
+    } else if(cc === MIDI_CC.knob5_8[idx]){
+      updateFn = (targetState) => { targetState.warp = Math.round(val/127*100); };
+      label = 'Knopf 5-8 -> Warp';
+    } else if(cc === MIDI_CC.solo1_4[idx] && val>0){
+      updateFn = (targetState) => { targetState.strobe = !targetState.strobe; };
+      label = 'Solo 1-4 -> Strobe Toggle';
+    } else if(cc === MIDI_CC.mute1_4[idx] && val>0){
+      updateFn = (targetState) => { targetState.kaleido = !targetState.kaleido; };
+      label = 'Mute 1-4 -> Kaleido Toggle';
+    } else if(cc === MIDI_CC.rec1_4[idx] && val>0){
+      updateFn = (targetState) => { targetState.feedback = targetState.feedback > 0 ? 0 : 0.92; }; // Stärkeres Feedback (0.92!)
+      label = 'Rec 1-4 -> Feedback Toggle';
+    } else if(cc === MIDI_CC.solo5_8[idx] && val>0){
+      updateFn = (targetState) => {
+        const key = LAYER_KEYS[targetState.activeLayer];
+        targetState[key] = (targetState[key] + 1 + clips.length) % Math.max(1, clips.length);
+        if(clips.length === 0) targetState[key] = -1;
+      };
+      label = `Solo 5-8 -> Nächster Clip (Layer ${s.activeLayer})`;
+    } else if(cc === MIDI_CC.mute5_8[idx] && val>0){
+      updateFn = (targetState) => {
+        const styles = ['none', 'cyberpunk', 'acid', 'fire', 'psychedelic'];
+        const currentIdx = styles.indexOf(targetState.colorizer);
+        targetState.colorizer = styles[(currentIdx + 1) % styles.length];
+      };
+      label = `Mute 5-8 -> Colorizer Style (${s.colorizer})`;
+    } else if(cc === MIDI_CC.rec5_8[idx] && val>0){
+      updateFn = (targetState) => { targetState.glitch = targetState.glitch > 0 ? 0 : 85; }; // Stärkerer Glitch (85%!)
+      label = 'Rec 5-8 -> Glitch Toggle';
     } else {
-      continue; // gehört nicht zu dieser Spur, nächste prüfen
+      continue;
     }
 
-    ccMonitor.textContent = `Ch ${ch} | CC ${cc} = ${val} | Screen ${screenNum}` + (label ? ` (${label})` : '');
-    broadcastState(screenNum);
-    if(screenNum === focusScreen) refreshControlsFromState();
+    if(updateFn){
+      if(linkAll){
+        [1,2,3,4].forEach(n => {
+          updateFn(screenStates[n]);
+          broadcastState(n);
+        });
+      } else {
+        updateFn(s);
+        broadcastState(screenNum);
+      }
+    }
+
+    ccMonitor.textContent = `Ch ${ch} | CC ${cc} = ${val} | ` + (linkAll ? 'ALLE SCREENS' : `Screen ${screenNum}`) + (label ? ` (${label})` : '');
+    if(linkAll || screenNum === focusScreen) refreshControlsFromState();
     return;
   }
 }
@@ -1235,6 +1377,19 @@ const warpTempCanvas = document.createElement('canvas');
 const warpTempCtx = warpTempCanvas.getContext('2d');
 const posterizeTempCanvas = document.createElement('canvas');
 const posterizeTempCtx = posterizeTempCanvas.getContext('2d');
+
+const previewCanvases = {
+  1: document.createElement('canvas'),
+  2: document.createElement('canvas'),
+  3: document.createElement('canvas'),
+  4: document.createElement('canvas'),
+};
+const previewCtxs = {
+  1: previewCanvases[1].getContext('2d'),
+  2: previewCanvases[2].getContext('2d'),
+  3: previewCanvases[3].getContext('2d'),
+  4: previewCanvases[4].getContext('2d'),
+};
 
 let delayCanvases = [];
 let delayCtxs = [];
@@ -1300,76 +1455,57 @@ function applyColorizer(cCtx, w, h, style){
   cCtx.restore();
 }
 
-function drawMirror(canvas){
+function drawMirror(canvas, targetCtx = ctx){
   const w2 = W/2, h2 = H/2;
   if(state.mirror === 'h'){
-    ctx.drawImage(canvas, 0, 0, w2, H, 0, 0, w2, H);
-    ctx.save();
-    ctx.translate(W, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(canvas, 0, 0, w2, H, 0, 0, w2, H);
-    ctx.restore();
+    targetCtx.drawImage(canvas, 0, 0, w2, H, 0, 0, w2, H);
+    targetCtx.save();
+    targetCtx.translate(W, 0);
+    targetCtx.scale(-1, 1);
+    targetCtx.drawImage(canvas, 0, 0, w2, H, 0, 0, w2, H);
+    targetCtx.restore();
   } else if(state.mirror === 'h-reverse'){
-    ctx.drawImage(canvas, w2, 0, w2, H, w2, 0, w2, H);
-    ctx.save();
-    ctx.translate(w2, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(canvas, w2, 0, w2, H, 0, 0, w2, H);
-    ctx.restore();
+    targetCtx.drawImage(canvas, w2, 0, w2, H, w2, 0, w2, H);
+    targetCtx.save();
+    targetCtx.translate(w2, 0);
+    targetCtx.scale(-1, 1);
+    targetCtx.drawImage(canvas, w2, 0, w2, H, 0, 0, w2, H);
+    targetCtx.restore();
   } else if(state.mirror === 'v'){
-    ctx.drawImage(canvas, 0, 0, W, h2, 0, 0, W, h2);
-    ctx.save();
-    ctx.translate(0, H);
-    ctx.scale(1, -1);
-    ctx.drawImage(canvas, 0, 0, W, h2, 0, 0, W, h2);
-    ctx.restore();
+    targetCtx.drawImage(canvas, 0, 0, W, h2, 0, 0, W, h2);
+    targetCtx.save();
+    targetCtx.translate(0, H);
+    targetCtx.scale(1, -1);
+    targetCtx.drawImage(canvas, 0, 0, W, h2, 0, 0, W, h2);
+    targetCtx.restore();
   } else if(state.mirror === 'v-reverse'){
-    ctx.drawImage(canvas, 0, h2, W, h2, 0, h2, W, h2);
-    ctx.save();
-    ctx.translate(0, h2);
-    ctx.scale(1, -1);
-    ctx.drawImage(canvas, 0, h2, W, h2, 0, 0, W, h2);
-    ctx.restore();
+    targetCtx.drawImage(canvas, 0, h2, W, h2, 0, h2, W, h2);
+    targetCtx.save();
+    targetCtx.translate(0, h2);
+    targetCtx.scale(1, -1);
+    targetCtx.drawImage(canvas, 0, h2, W, h2, 0, 0, W, h2);
+    targetCtx.restore();
   } else if(state.mirror === 'both'){
-    ctx.drawImage(canvas, 0, 0, w2, h2, 0, 0, w2, h2);
-    ctx.save();
-    ctx.translate(W, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(canvas, 0, 0, w2, h2, 0, 0, w2, h2);
-    ctx.restore();
-    ctx.save();
-    ctx.translate(0, H);
-    ctx.scale(1, -1);
-    ctx.drawImage(canvas, 0, 0, w2, h2, 0, 0, w2, h2);
-    ctx.restore();
-    ctx.save();
-    ctx.translate(W, H);
-    ctx.scale(-1, -1);
-    ctx.drawImage(canvas, 0, 0, w2, h2, 0, 0, w2, h2);
-    ctx.restore();
+    targetCtx.drawImage(canvas, 0, 0, w2, h2, 0, 0, w2, h2);
+    targetCtx.save();
+    targetCtx.translate(W, 0);
+    targetCtx.scale(-1, 1);
+    targetCtx.drawImage(canvas, 0, 0, w2, h2, 0, 0, w2, h2);
+    targetCtx.restore();
+    targetCtx.save();
+    targetCtx.translate(0, H);
+    targetCtx.scale(1, -1);
+    targetCtx.drawImage(canvas, 0, 0, w2, h2, 0, 0, w2, h2);
+    targetCtx.restore();
+    targetCtx.save();
+    targetCtx.translate(W, H);
+    targetCtx.scale(-1, -1);
+    targetCtx.drawImage(canvas, 0, 0, w2, h2, 0, 0, w2, h2);
+    targetCtx.restore();
   }
 }
 
-function draw(t){
-  requestAnimationFrame(draw);
-  updateAudio(t);
-
-  // FPS Counter
-  frameCount++;
-  if(t - lastFpsUpdate >= 1000){
-    const currentFps = Math.round((frameCount * 1000) / (t - lastFpsUpdate));
-    if (fpsVal) fpsVal.textContent = currentFps;
-    frameCount = 0;
-    lastFpsUpdate = t;
-  }
-
-  if(state.blackout){
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0,0,W,H);
-    return;
-  }
-
-  // Mute/Solo auflösen: wenn irgendein Layer soloed ist, sind alle anderen automatisch stumm
+function renderScreenComposition(targetCtx){
   const anySolo = state.layerSolo.A || state.layerSolo.B || state.layerSolo.C || state.layerSolo.D;
   const layerActive = {
     A: anySolo ? state.layerSolo.A : !state.layerMute.A,
@@ -1379,28 +1515,27 @@ function draw(t){
   };
 
   // Feedback Zoom/Rotate: transformiert den bestehenden Trail-Inhalt vor dem Fade
-  // -> klassischer Video-Feedback-Tunnel/Spiral-Sog
   if(state.feedback > 0 && (state.feedbackZoom !== 0 || state.feedbackRotate !== 0)){
     fbTempCanvas.width = W; fbTempCanvas.height = H;
     fbTempCtx.clearRect(0,0,W,H);
-    fbTempCtx.drawImage(stage, 0, 0);
-    ctx.clearRect(0,0,W,H);
-    ctx.save();
-    ctx.translate(W/2, H/2);
-    ctx.rotate((state.feedbackRotate/100) * 0.035);
+    fbTempCtx.drawImage(targetCtx.canvas, 0, 0);
+    targetCtx.clearRect(0,0,W,H);
+    targetCtx.save();
+    targetCtx.translate(W/2, H/2);
+    targetCtx.rotate((state.feedbackRotate/100) * 0.035);
     const fbZoom = 1 + (state.feedbackZoom/100) * 0.05;
-    ctx.scale(fbZoom, fbZoom);
-    ctx.drawImage(fbTempCanvas, -W/2, -H/2, W, H);
-    ctx.restore();
+    targetCtx.scale(fbZoom, fbZoom);
+    targetCtx.drawImage(fbTempCanvas, -W/2, -H/2, W, H);
+    targetCtx.restore();
   }
 
   // Trail / Feedback
   const fade = 1 - (0.06 + state.feedback*0.9);
-  ctx.fillStyle = `rgba(0,0,0,${Math.max(0.04, fade)})`;
-  ctx.fillRect(0,0,W,H);
+  targetCtx.fillStyle = `rgba(0,0,0,${Math.max(0.04, fade)})`;
+  targetCtx.fillRect(0,0,W,H);
 
   if (state.freeze && freezeCanvas) {
-    ctx.drawImage(freezeCanvas, 0, 0, W, H);
+    targetCtx.drawImage(freezeCanvas, 0, 0, W, H);
   } else {
     // Resize masterCanvas if needed
     if (masterCanvas.width !== W || masterCanvas.height !== H) {
@@ -1435,53 +1570,50 @@ function draw(t){
       applyColorizer(masterCtx, W, H, state.colorizer);
     }
 
-    // 4. Now draw masterCanvas to the main ctx, applying Mirror and/or Kaleidoscope!
-    ctx.save();
+    // 4. Now draw masterCanvas to targetCtx, applying Mirror and/or Kaleidoscope!
+    targetCtx.save();
     if (state.kaleido) {
-      drawKaleido(masterCanvas, 1.0, 'source-over');
+      drawKaleido(masterCanvas, 1.0, 'source-over', targetCtx);
     } else if (state.mirror !== 'none') {
-      drawMirror(masterCanvas);
+      drawMirror(masterCanvas, targetCtx);
     } else {
-      ctx.drawImage(masterCanvas, 0, 0);
+      targetCtx.drawImage(masterCanvas, 0, 0);
     }
-    ctx.restore();
+    targetCtx.restore();
   }
-
-  // Update Echo Buffers
-  updateDelayBuffers();
 
   // Draw Echoes
   if(state.echo > 0 && delayCanvases.length > 0){
-    ctx.save();
+    targetCtx.save();
     delayCanvases.forEach((c, idx)=>{
       if(c.width === W && c.height === H){
-        ctx.globalAlpha = (state.echo / 100) * 0.3 * (1 - idx * 0.25);
-        ctx.globalCompositeOperation = 'screen';
-        ctx.filter = state.echoRainbow ? `hue-rotate(${idx*45}deg) saturate(1.6)` : 'none';
+        targetCtx.globalAlpha = (state.echo / 100) * 0.3 * (1 - idx * 0.25);
+        targetCtx.globalCompositeOperation = 'screen';
+        targetCtx.filter = state.echoRainbow ? `hue-rotate(${idx*45}deg) saturate(1.6)` : 'none';
         const offset = (idx + 1) * 8 * (1 + state.audioBass * 0.5);
-        ctx.drawImage(c, offset, 0, W, H);
+        targetCtx.drawImage(c, offset, 0, W, H);
       }
     });
-    ctx.filter = 'none';
-    ctx.restore();
+    targetCtx.filter = 'none';
+    targetCtx.restore();
   }
 
-  // Warp: fließende Wellen-Verzerrung (im Gegensatz zum harten Glitch-Schnitt)
+  // Warp: fließende Wellen-Verzerrung
   if(state.warp > 0){
     warpTempCanvas.width = W; warpTempCanvas.height = H;
     warpTempCtx.clearRect(0,0,W,H);
-    warpTempCtx.drawImage(stage, 0, 0);
-    const amp = (state.warp/100) * (W*0.04) * (1 + state.audioBass*0.6);
+    warpTempCtx.drawImage(targetCtx.canvas, 0, 0);
+    const amp = (state.warp/100) * (W*0.12) * (1 + state.audioBass*0.6);
     const freq = 0.015;
     const speed = performance.now()*0.0018;
     const sliceH = 4;
     for(let y=0; y<H; y+=sliceH){
       const disp = Math.sin(y*freq + speed) * amp;
-      ctx.drawImage(warpTempCanvas, 0, y, W, sliceH, disp, y, W, sliceH);
+      targetCtx.drawImage(warpTempCanvas, 0, y, W, sliceH, disp, y, W, sliceH);
     }
   }
 
-  // Glitch Slices (Datamosh-style)
+  // Glitch Slices
   if(state.glitch > 0){
     const threshold = state.audioLevel > 0 ? (0.3 - (state.glitch/100) * 0.1) : 0.5;
     const rate = (state.glitch / 100) * 0.4;
@@ -1491,7 +1623,7 @@ function draw(t){
         const sy = Math.random() * H;
         const sh = Math.random() * (H * 0.2) + 5;
         const disp = (Math.random() - 0.5) * (W * 0.1) * (state.glitch / 100) * (1 + state.audioBass);
-        ctx.drawImage(stage, 0, sy, W, sh, disp, sy, W, sh);
+        targetCtx.drawImage(targetCtx.canvas, 0, sy, W, sh, disp, sy, W, sh);
       }
     }
   }
@@ -1500,42 +1632,118 @@ function draw(t){
   if(state.strobe){
     let flash;
     if(state.beatSync){
-      const phase = getBeatPhase(); // 0-1
+      const phase = getBeatPhase();
       flash = phase < 0.12 ? (1 - phase/0.12) * 0.9 : 0;
     } else {
-      flash = Math.abs(Math.sin(t*0.02)) > 0.85 ? 0.9 : 0;
+      flash = Math.abs(Math.sin(performance.now()*0.02)) > 0.85 ? 0.9 : 0;
     }
     if(flash>0){
-      ctx.fillStyle = `rgba(255,255,255,${flash})`;
-      ctx.fillRect(0,0,W,H);
+      targetCtx.fillStyle = `rgba(255,255,255,${flash})`;
+      targetCtx.fillRect(0,0,W,H);
     }
   }
 
   // Vignette
   if(state.vignette > 0){
-    ctx.save();
-    const grad = ctx.createRadialGradient(W/2, H/2, Math.min(W, H) * 0.3, W/2, H/2, Math.max(W, H) * 0.8);
+    targetCtx.save();
+    const grad = targetCtx.createRadialGradient(W/2, H/2, Math.min(W, H) * 0.3, W/2, H/2, Math.max(W, H) * 0.8);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
     grad.addColorStop(1, `rgba(0,0,0,${state.vignette / 100})`);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
+    targetCtx.fillStyle = grad;
+    targetCtx.fillRect(0, 0, W, H);
+    targetCtx.restore();
   }
 
-  // Posterize: reduziert Farbabstufungen für harte Poster-/Comic-Flächen
+  // Posterize
   if(state.posterizeLevels >= 2){
     posterizeTempCanvas.width = W; posterizeTempCanvas.height = H;
     posterizeTempCtx.filter = 'url(#posterizeFilter)';
-    posterizeTempCtx.drawImage(stage, 0, 0);
+    posterizeTempCtx.drawImage(targetCtx.canvas, 0, 0);
     posterizeTempCtx.filter = 'none';
-    ctx.clearRect(0,0,W,H);
-    ctx.drawImage(posterizeTempCanvas, 0, 0);
+    targetCtx.clearRect(0,0,W,H);
+    targetCtx.drawImage(posterizeTempCanvas, 0, 0);
   }
 
-  // Layer D: FX-freier Overlay-Layer, ganz zum Schluss, unbeeinflusst von allem oben
+  // Layer D: FX-freier Overlay-Layer
   if (layerActive.D && state.layerD >= 0 && state.layerD < clips.length && state.mixD > 0) {
     const clipD = clips[state.layerD];
-    drawCleanLayer(clipD.el, state.mixD / 100, state.blendModeD, ctx);
+    drawCleanLayer(clipD.el, state.mixD / 100, state.blendModeD, targetCtx);
+  }
+}
+
+function draw(t){
+  requestAnimationFrame(draw);
+  updateAudio(t);
+
+  // FPS Counter
+  frameCount++;
+  if(t - lastFpsUpdate >= 1000){
+    const currentFps = Math.round((frameCount * 1000) / (t - lastFpsUpdate));
+    if (fpsVal) fpsVal.textContent = currentFps;
+    frameCount = 0;
+    lastFpsUpdate = t;
+  }
+
+  if (IS_OUTPUT) {
+    if(state.blackout){
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0,0,W,H);
+      return;
+    }
+    
+    renderScreenComposition(ctx);
+    updateDelayBuffers();
+  } else if (IS_CONTROLLER) {
+    // 2x2 Splitscreen Vorschau für alle 4 Screens auf dem Controller
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+
+    const oldState = state; // aktuell im Panel bearbeiteten Screen sichern
+    
+    for (let n = 1; n <= 4; n++) {
+      state = screenStates[n];
+      
+      const pCanvas = previewCanvases[n];
+      const pCtx = previewCtxs[n];
+      if (pCanvas.width !== W || pCanvas.height !== H) {
+        pCanvas.width = W;
+        pCanvas.height = H;
+      }
+      
+      if(state.blackout){
+        pCtx.fillStyle = '#000';
+        pCtx.fillRect(0,0,W,H);
+      } else {
+        renderScreenComposition(pCtx);
+      }
+      
+      // Skaliert im 2x2 Raster zeichnen
+      const col = (n - 1) % 2;
+      const row = Math.floor((n - 1) / 2);
+      const dx = col * (W / 2);
+      const dy = row * (H / 2);
+      const dw = W / 2;
+      const dh = H / 2;
+      
+      ctx.save();
+      ctx.drawImage(pCanvas, dx, dy, dw, dh);
+      
+      // Rahmen und Label drüberlegen
+      const isFocused = (n === focusScreen);
+      ctx.strokeStyle = isFocused ? '#df8de3' : '#2a2a30'; // --accent oder --line
+      ctx.lineWidth = isFocused ? 4 : 2;
+      ctx.strokeRect(dx, dy, dw, dh);
+      
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(dx + 10, dy + 10, 110, 24);
+      ctx.fillStyle = isFocused ? '#df8de3' : '#d8d8dc';
+      ctx.font = 'bold 11px var(--mono)';
+      ctx.fillText(`SCREEN ${n}` + (isFocused ? ' (Fokus)' : ''), dx + 16, dy + 26);
+      ctx.restore();
+    }
+    
+    state = oldState; // Bearbeitungs-State wiederherstellen
+    updateDelayBuffers();
   }
 }
 
@@ -1640,7 +1848,7 @@ function drawVideo(v, opacity, blendMode = 'source-over', targetCtx = ctx){
   targetCtx.restore();
 }
 
-function drawKaleido(canvas, baseOpacity, blendMode = 'source-over'){
+function drawKaleido(canvas, baseOpacity, blendMode = 'source-over', targetCtx = ctx){
   const segs = Math.max(2, state.kaleidoSegs);
   const speed = state.kaleidoSpeed;
   const zoom = state.kaleidoZoom;
@@ -1648,42 +1856,33 @@ function drawKaleido(canvas, baseOpacity, blendMode = 'source-over'){
   const rotationOffset = performance.now()*0.0002*speed;
   const radius = Math.hypot(W, H); // groß genug, um die Bilddiagonale immer abzudecken
 
-  ctx.save();
-  ctx.globalCompositeOperation = blendMode;
-  ctx.globalAlpha = baseOpacity;
-  ctx.translate(W/2, H/2);
+  targetCtx.save();
+  targetCtx.globalCompositeOperation = blendMode;
+  targetCtx.globalAlpha = baseOpacity;
+  targetCtx.translate(W/2, H/2);
 
   // Nicht-überlappende Segment-Clips statt additivem Draufaddieren -> kein Weißblowout
   // mehr, egal wie viele Segmente oder wie hell das Quellmaterial ist.
   for(let i=0;i<segs;i++){
-    ctx.save();
-    ctx.rotate(i*angleStep + rotationOffset);
-    if(i % 2 === 1) ctx.scale(1, -1); // jedes zweite Segment gespiegelt = klassischer Reflex-Look
+    targetCtx.save();
+    targetCtx.rotate(i*angleStep + rotationOffset);
+    if(i % 2 === 1) targetCtx.scale(1, -1); // jedes zweite Segment gespiegelt = klassischer Reflex-Look
 
-    ctx.beginPath();
-    ctx.moveTo(0,0);
-    ctx.arc(0, 0, radius, -angleStep/2 - 0.01, angleStep/2 + 0.01);
-    ctx.closePath();
-    ctx.clip();
+    targetCtx.beginPath();
+    targetCtx.moveTo(0,0);
+    targetCtx.arc(0, 0, radius, -angleStep/2 - 0.01, angleStep/2 + 0.01);
+    targetCtx.closePath();
+    targetCtx.clip();
 
-    ctx.scale(zoom, zoom);
-    ctx.drawImage(canvas, -W/2, -H/2, W, H);
-    ctx.restore();
+    targetCtx.scale(zoom, zoom);
+    targetCtx.drawImage(canvas, -W/2, -H/2, W, H);
+    targetCtx.restore();
   }
-  ctx.restore();
+  targetCtx.restore();
 }
 
-// Output-Fenster: volle Render-Pipeline. Controller: kein Bild, nur Audio-Pegel-Messung.
-if(IS_OUTPUT){
-  requestAnimationFrame(draw);
-} else {
-  ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H); // Controller zeigt bewusst kein Bild
-  function audioMeterLoop(t){
-    requestAnimationFrame(audioMeterLoop);
-    updateAudio(t);
-  }
-  requestAnimationFrame(audioMeterLoop);
-}
+// Animations-Loop starten (liefert Live-Bild auf dem Output und Vorschau-Hintergrund auf dem Controller)
+requestAnimationFrame(draw);
 
 /* ---------- UI Utilities ---------- */
 document.getElementById('fsBtn').onclick = toggleFullscreen;
@@ -1781,7 +1980,7 @@ function startRecording(){
     }
   };
   
-  mediaRecorder.onstop = () => {
+  mediaRecorder.onstop = async () => {
     const blob = new Blob(recordedChunks, { type: 'video/webm' });
     const name = `LoopRec_Screen${OUTPUT_SCREEN}_${new Date().toLocaleTimeString().replace(/:/g, '-')}.webm`;
 
@@ -1789,11 +1988,13 @@ function startRecording(){
     saveRecordingToDisk(blob, name);
     console.log(`Aufnahme gespeichert: ${name}`);
 
-    // Per BroadcastChannel an den Controller senden, damit er es in die Video-Bank lädt
+    // Per BroadcastChannel an den Controller senden (als ArrayBuffer für Safari-Kompatibilität)
+    const buffer = await blob.arrayBuffer();
     controlChannel.postMessage({
       type: 'new-recorded-clip',
-      blob: blob,
-      name: name
+      buffer: buffer,
+      name: name,
+      mimeType: 'video/webm'
     });
   };
   
@@ -1844,7 +2045,7 @@ function applyPresetState(data = {}){
   fbSlider.value = Math.round(state.feedback*100); fbVal.textContent = fbSlider.value;
   fbZoomSlider.value = state.feedbackZoom; fbZoomVal.textContent = state.feedbackZoom;
   fbRotateSlider.value = state.feedbackRotate; fbRotateVal.textContent = state.feedbackRotate;
-  rgbSlider.value = Math.round(state.rgbShift/30*100); rgbVal.textContent = rgbSlider.value;
+  rgbSlider.value = Math.round(state.rgbShift/90*100); rgbVal.textContent = Math.round(state.rgbShift);
   hueSlider.value = state.hue; hueVal.textContent = state.hue;
   hueSpeedSlider.value = state.hueSpeed; hueSpeedVal.textContent = state.hueSpeed;
   warpSlider.value = state.warp; warpVal.textContent = state.warp;
